@@ -54,10 +54,17 @@
 - Displays thumbnail, video title, channel name, play/pause controls, and live progress bar.
 - Expand back to the full player with a single tap.
 
-### 👤 Account & Session Management
-- **Google Account Sync**: View your personalized recommendations, liked videos, and playlists.
-- **Account Switcher**: Bottom sheet for managing connected accounts.
-- **One-Tap Logout**: Quick logout button located on the account row to easily sign out.
+### 👤 Account & Playlist Management
+- **Universal Playlist Discovery**: Automatically fetches all user playlists from YouTube library, playlist aggregation, channel playlists, and sidebar guide.
+- **Deep Video Pagination**: Supports full continuation pagination up to 2,000+ videos per playlist (Liked Videos, Watch Later, and large custom series/podcasts).
+- **Google Account Sync**: Syncs personalized recommendations, watch history, subscriptions, and profile info.
+- **Account Switcher**: Easy sheet for switching connected Google accounts or logging out.
+
+### 📱 Native Navigation & Feed Polish
+- **Pull-to-Refresh Feed**: Drag down on the home feed to refresh with native YouTube-styled indicator.
+- **Home Tap to Scroll-to-Top**: Tapping the Home navigation button while on the main feed smoothly scrolls back to the very top (just like the official YouTube app).
+- **Infinite Search & Feed Scrolling**: Seamless automatic pagination as you scroll down for more videos.
+- **Minimalist Top Bar**: Clean typography with instant toggle between Video and Music modes.
 
 ---
 
