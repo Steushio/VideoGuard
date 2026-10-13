@@ -1,0 +1,7 @@
+<resources>
+    <color name="yt_black">#0F0F0F</color>
+    <color name="yt_red">#FF0000</color>
+    <color name="yt_white">#FFFFFF</color>
+    <color name="yt_music_black">#030303</color>
+    <color name="yt_music_card">#212121</color>
+</resources>
