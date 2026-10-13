@@ -58,29 +58,13 @@ fun YouTubeFeedScreen(
     val pullToRefreshState = rememberPullToRefreshState()
     val coroutineScope = rememberCoroutineScope()
 
-    // Drag / animate scroll to top when Home button is clicked
+    // Smoothly drag / animate scroll back to top when Home button is clicked (no syncing)
     LaunchedEffect(scrollToTopTrigger) {
         if (scrollToTopTrigger > 0) {
-            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
-                // Already at the very top: trigger refresh like YouTube
-                isRefreshing = true
-                try {
-                    val fresh = com.videoguard.app.data.YouTubeSyncEngine.fetchHomeFeed(selectedCategory)
-                    if (fresh.isNotEmpty()) {
-                        feedVideos = fresh
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                } finally {
-                    isRefreshing = false
-                }
-            } else {
-                // Smoothly drag scroll back to top
-                if (listState.firstVisibleItemIndex > 8) {
-                    listState.scrollToItem(8)
-                }
-                listState.animateScrollToItem(0)
+            if (listState.firstVisibleItemIndex > 8) {
+                listState.scrollToItem(8)
             }
+            listState.animateScrollToItem(0)
         }
     }
 
