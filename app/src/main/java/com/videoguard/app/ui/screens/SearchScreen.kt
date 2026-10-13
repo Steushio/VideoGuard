@@ -69,35 +69,38 @@ fun SearchScreen(
     val searchListState = rememberLazyListState()
     var isLoadingMoreSearch by remember { mutableStateOf(false) }
     var seenSearchIds by remember { mutableStateOf(setOf<String>()) }
+    var searchPage by remember { mutableStateOf(0) }
 
-    // Detect when user is near the bottom of search results
-    val shouldLoadMoreSearch = remember {
-        derivedStateOf {
+    // Use snapshotFlow to detect EVERY time user reaches near the bottom — not just first time
+    LaunchedEffect(searchListState, hasSearched) {
+        snapshotFlow {
             val layoutInfo = searchListState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             val total = layoutInfo.totalItemsCount
             hasSearched && total > 0 && lastVisible >= total - 3
         }
-    }
-
-    // Load more when near bottom
-    LaunchedEffect(shouldLoadMoreSearch.value) {
-        if (shouldLoadMoreSearch.value && !isLoadingMoreSearch && searchQuery.isNotBlank()) {
-            isLoadingMoreSearch = true
-            try {
-                val more = YouTubeSearchEngine.searchVideos(searchQuery, isMusicOnly = isMusic)
-                val currentIds = seenSearchIds
-                val newItems = more.filter { it.id !in currentIds }
-                if (newItems.isNotEmpty()) {
-                    seenSearchIds = currentIds + newItems.map { it.id }
-                    searchResults = searchResults + newItems
+            .collect { nearBottom ->
+                if (nearBottom && !isLoadingMoreSearch && searchQuery.isNotBlank()) {
+                    isLoadingMoreSearch = true
+                    try {
+                        searchPage++
+                        val more = YouTubeSearchEngine.searchVideos(
+                            searchQuery,
+                            isMusicOnly = isMusic,
+                            page = searchPage
+                        )
+                        val newItems = more.filter { it.id !in seenSearchIds }
+                        if (newItems.isNotEmpty()) {
+                            seenSearchIds = seenSearchIds + newItems.map { it.id }
+                            searchResults = searchResults + newItems
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    } finally {
+                        isLoadingMoreSearch = false
+                    }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                isLoadingMoreSearch = false
             }
-        }
     }
 
     val presetChips = listOf(
@@ -113,12 +116,13 @@ fun SearchScreen(
         isSearching = true
         hasSearched = true
         seenSearchIds = emptySet()
+        searchPage = 0
         keyboardController?.hide()
         UserDataRepository.addSearchQuery(trimmed)
 
         coroutineScope.launch {
             try {
-                val results = YouTubeSearchEngine.searchVideos(trimmed, isMusicOnly = isMusic)
+                val results = YouTubeSearchEngine.searchVideos(trimmed, isMusicOnly = isMusic, page = 0)
                 searchResults = results
                 seenSearchIds = results.map { it.id }.toSet()
             } catch (e: Exception) {

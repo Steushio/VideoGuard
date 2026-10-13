@@ -38,7 +38,7 @@ object YouTubeSearchEngine {
         emptyList()
     }
 
-    suspend fun searchVideos(query: String, isMusicOnly: Boolean = false): List<VideoItem> = withContext(Dispatchers.IO) {
+    suspend fun searchVideos(query: String, isMusicOnly: Boolean = false, page: Int = 0): List<VideoItem> = withContext(Dispatchers.IO) {
         if (query.isBlank()) {
             return@withContext if (isMusicOnly) VideoRepository.getMusicTracks() else VideoRepository.sampleVideos
         }
@@ -51,7 +51,15 @@ object YouTubeSearchEngine {
 
         try {
             val encoded = URLEncoder.encode(searchQuery.trim(), "UTF-8")
-            val url = URL("https://www.youtube.com/results?search_query=$encoded")
+            // YouTube paginates via "sp" continuation tokens; we rotate query modifiers
+            // to get fresh result sets when paging beyond what one HTML request gives.
+            val pageParam = when (page) {
+                0 -> ""
+                1 -> "&sp=EgIQAQ%3D%3D"   // videos filter — slightly different ordering
+                2 -> "&sp=EgIQAw%3D%3D"   // live filter excluded — fresh set
+                else -> "&sp=EgIQAQ%3D%3D&page=$page"
+            }
+            val url = URL("https://www.youtube.com/results?search_query=$encoded$pageParam")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 7000
