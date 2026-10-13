@@ -115,84 +115,95 @@ fun ChannelScreen(
         }
     }
 
-    // Videos pagination trigger
-    val shouldLoadMoreVideos by remember {
-        derivedStateOf {
-            if (selectedTab != "Videos" || isLoadingVideos || isLoadingMoreVideos || videosContinuationToken.isNullOrBlank()) {
-                false
-            } else {
-                val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                val totalItems = listState.layoutInfo.totalItemsCount
-                totalItems > 0 && lastVisibleIndex >= totalItems - 4
+    val coroutineScope = rememberCoroutineScope()
+
+    fun loadMoreVideos() {
+        if (isLoadingVideos || isLoadingMoreVideos || videosContinuationToken.isNullOrBlank()) return
+        isLoadingMoreVideos = true
+        coroutineScope.launch {
+            try {
+                val token = videosContinuationToken
+                if (!token.isNullOrBlank()) {
+                    val (moreVids, nextToken) = YouTubeSyncEngine.fetchChannelVideos(channelName, token)
+                    if (moreVids.isNotEmpty()) {
+                        val existing = channelVideos.map { it.id }.toSet()
+                        val newBatch = moreVids.filter { it.id !in existing }
+                        channelVideos = channelVideos + newBatch
+                    }
+                    videosContinuationToken = if (moreVids.isEmpty()) null else nextToken
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ChannelScreen", "Error loading more videos", e)
+                videosContinuationToken = null
+            } finally {
+                isLoadingMoreVideos = false
             }
         }
     }
 
-    LaunchedEffect(shouldLoadMoreVideos) {
-        if (shouldLoadMoreVideos && !isLoadingMoreVideos && !videosContinuationToken.isNullOrBlank()) {
-            isLoadingMoreVideos = true
-            val (moreVids, nextToken) = YouTubeSyncEngine.fetchChannelVideos(channelName, videosContinuationToken)
-            if (moreVids.isNotEmpty()) {
-                val existing = channelVideos.map { it.id }.toSet()
-                val newBatch = moreVids.filter { it.id !in existing }
-                channelVideos = channelVideos + newBatch
-            }
-            videosContinuationToken = nextToken
-            isLoadingMoreVideos = false
-        }
-    }
-
-    // Playlists pagination trigger
-    val shouldLoadMorePlaylists by remember {
-        derivedStateOf {
-            if (selectedTab != "Playlists" || isLoadingPlaylists || isLoadingMorePlaylists || playlistsContinuationToken.isNullOrBlank()) {
-                false
-            } else {
-                val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                val totalItems = listState.layoutInfo.totalItemsCount
-                totalItems > 0 && lastVisibleIndex >= totalItems - 4
+    fun loadMorePlaylists() {
+        if (isLoadingPlaylists || isLoadingMorePlaylists || playlistsContinuationToken.isNullOrBlank()) return
+        isLoadingMorePlaylists = true
+        coroutineScope.launch {
+            try {
+                val token = playlistsContinuationToken
+                if (!token.isNullOrBlank()) {
+                    val (morePls, nextToken) = YouTubeSyncEngine.fetchChannelPlaylists(channelName, token)
+                    if (morePls.isNotEmpty()) {
+                        val existing = channelPlaylists.map { it.id }.toSet()
+                        val newBatch = morePls.filter { it.id !in existing }
+                        channelPlaylists = channelPlaylists + newBatch
+                    }
+                    playlistsContinuationToken = if (morePls.isEmpty()) null else nextToken
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ChannelScreen", "Error loading more playlists", e)
+                playlistsContinuationToken = null
+            } finally {
+                isLoadingMorePlaylists = false
             }
         }
     }
 
-    LaunchedEffect(shouldLoadMorePlaylists) {
-        if (shouldLoadMorePlaylists && !isLoadingMorePlaylists && !playlistsContinuationToken.isNullOrBlank()) {
-            isLoadingMorePlaylists = true
-            val (morePls, nextToken) = YouTubeSyncEngine.fetchChannelPlaylists(channelName, playlistsContinuationToken)
-            if (morePls.isNotEmpty()) {
-                val existing = channelPlaylists.map { it.id }.toSet()
-                val newBatch = morePls.filter { it.id !in existing }
-                channelPlaylists = channelPlaylists + newBatch
-            }
-            playlistsContinuationToken = nextToken
-            isLoadingMorePlaylists = false
-        }
-    }
-
-    // Shorts pagination trigger
-    val shouldLoadMoreShorts by remember {
-        derivedStateOf {
-            if (selectedTab != "Shorts" || isLoadingShorts || isLoadingMoreShorts || shortsContinuationToken.isNullOrBlank()) {
-                false
-            } else {
-                val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                val totalItems = listState.layoutInfo.totalItemsCount
-                totalItems > 0 && lastVisibleIndex >= totalItems - 4
+    fun loadMoreShorts() {
+        if (isLoadingShorts || isLoadingMoreShorts || shortsContinuationToken.isNullOrBlank()) return
+        isLoadingMoreShorts = true
+        coroutineScope.launch {
+            try {
+                val token = shortsContinuationToken
+                if (!token.isNullOrBlank()) {
+                    val (moreShorts, nextToken) = YouTubeSyncEngine.fetchChannelShorts(channelName, token)
+                    if (moreShorts.isNotEmpty()) {
+                        val existing = channelShorts.map { it.id }.toSet()
+                        val newBatch = moreShorts.filter { it.id !in existing }
+                        channelShorts = channelShorts + newBatch
+                    }
+                    shortsContinuationToken = if (moreShorts.isEmpty()) null else nextToken
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ChannelScreen", "Error loading more shorts", e)
+                shortsContinuationToken = null
+            } finally {
+                isLoadingMoreShorts = false
             }
         }
     }
 
-    LaunchedEffect(shouldLoadMoreShorts) {
-        if (shouldLoadMoreShorts && !isLoadingMoreShorts && !shortsContinuationToken.isNullOrBlank()) {
-            isLoadingMoreShorts = true
-            val (moreShorts, nextToken) = YouTubeSyncEngine.fetchChannelShorts(channelName, shortsContinuationToken)
-            if (moreShorts.isNotEmpty()) {
-                val existing = channelShorts.map { it.id }.toSet()
-                val newBatch = moreShorts.filter { it.id !in existing }
-                channelShorts = channelShorts + newBatch
+    // Proactive pagination listener triggered as user approaches bottom
+    LaunchedEffect(listState, selectedTab) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            Pair(lastVisible, total)
+        }.collect { (lastVisible, total) ->
+            if (total > 0 && lastVisible >= total - 6) {
+                when (selectedTab) {
+                    "Videos" -> loadMoreVideos()
+                    "Playlists" -> loadMorePlaylists()
+                    "Shorts" -> loadMoreShorts()
+                }
             }
-            shortsContinuationToken = nextToken
-            isLoadingMoreShorts = false
         }
     }
 
@@ -485,8 +496,11 @@ fun ChannelScreen(
                             )
                             Spacer(modifier = Modifier.height(10.dp))
                         }
-                        if (isLoadingMorePlaylists) {
+                        if (playlistsContinuationToken != null) {
                             item {
+                                LaunchedEffect(playlistsContinuationToken) {
+                                    loadMorePlaylists()
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -556,8 +570,11 @@ fun ChannelScreen(
                             )
                             Spacer(modifier = Modifier.height(10.dp))
                         }
-                        if (isLoadingMoreShorts) {
+                        if (shortsContinuationToken != null) {
                             item {
+                                LaunchedEffect(shortsContinuationToken) {
+                                    loadMoreShorts()
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -614,8 +631,11 @@ fun ChannelScreen(
                             )
                             Spacer(modifier = Modifier.height(14.dp))
                         }
-                        if (isLoadingMoreVideos) {
+                        if (videosContinuationToken != null) {
                             item {
+                                LaunchedEffect(videosContinuationToken) {
+                                    loadMoreVideos()
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()

@@ -1439,11 +1439,12 @@ object YouTubeSyncEngine {
                 if (resp != null) {
                     extractVideosRecursively(resp, outVideos)
                     nextToken = extractContinuationToken(resp)
-                    return@withContext Pair(outVideos.distinctBy { it.id }, nextToken)
+                    android.util.Log.d("YouTubeSyncEngine", "fetchChannelVideos continuation extracted ${outVideos.size} videos, nextToken=${nextToken != null}")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos continuation error", e)
             }
+            return@withContext Pair(outVideos.distinctBy { it.id }, nextToken)
         }
 
         // Initial page via channelId
@@ -1497,11 +1498,12 @@ object YouTubeSyncEngine {
                 if (resp != null) {
                     extractPlaylistsRecursively(resp, outPlaylists)
                     nextToken = extractContinuationToken(resp)
-                    return@withContext Pair(outPlaylists.distinctBy { it.id }, nextToken)
+                    android.util.Log.d("YouTubeSyncEngine", "fetchChannelPlaylists continuation extracted ${outPlaylists.size} playlists, nextToken=${nextToken != null}")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("YouTubeSyncEngine", "fetchChannelPlaylists continuation error", e)
             }
+            return@withContext Pair(outPlaylists.distinctBy { it.id }, nextToken)
         }
 
         // Initial page via channelId
@@ -1560,11 +1562,12 @@ object YouTubeSyncEngine {
                 if (resp != null) {
                     extractVideosRecursively(resp, outShorts)
                     nextToken = extractContinuationToken(resp)
-                    return@withContext Pair(outShorts.distinctBy { it.id }, nextToken)
+                    android.util.Log.d("YouTubeSyncEngine", "fetchChannelShorts continuation extracted ${outShorts.size} shorts, nextToken=${nextToken != null}")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts continuation error", e)
             }
+            return@withContext Pair(outShorts.distinctBy { it.id }, nextToken)
         }
 
         val cid = resolveChannelId(channelNameOrId)
