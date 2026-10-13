@@ -1,83 +1,142 @@
-# VideoGuard - Dual-Mode YouTube & YouTube Music Android App
+# VideoGuard
 
-An Android application that replicates the **YouTube mobile app** experience while featuring an integrated **YouTube Music mode toggle** that dynamically transforms the video app into a dedicated music streaming app without interrupting playback.
+<div align="center">
+
+![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)
+![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)
+![Min SDK](https://img.shields.io/badge/Min%20SDK-26%20(Android%208.0)-brightgreen?style=for-the-badge)
+![Target SDK](https://img.shields.io/badge/Target%20SDK-35%20(Android%2015)-blue?style=for-the-badge)
+![License](https://img.shields.io/badge/License-MIT-orange?style=for-the-badge)
+
+**All-in-one, ad-free YouTube & YouTube Music client for Android with continuous background playback.**
+
+</div>
+
+---
+
+## 📖 Overview
+
+**VideoGuard** brings the complete YouTube video catalog and YouTube Music together in a single native Android app. Built entirely with **Jetpack Compose** and **Material 3**, VideoGuard lets you switch between watching full-fidelity videos and streaming music without interrupting playback, all while keeping audio playing in the background with the screen turned off.
 
 ---
 
 ## 🌟 Key Features
 
-### 1. 🔄 Instant Dual-Mode Toggle
-- **Top Bar Pill Switcher (`[ ▶ Video | 🎵 Music ]`)**: Switch seamlessly at any point between standard YouTube video browsing and YouTube Music mode.
-- **Continuous Playback Preservation**: When toggling between modes, the currently active track/video continues playing seamlessly with identical playback timestamp and state.
-- **In-Player Quick-Switch**: One-tap "Play in YT Music" pill directly inside the YouTube video watch screen.
+### 🎧 Background Audio Playback
+- **Screen-Off Listening**: Audio keeps streaming smoothly when your phone screen is locked.
+- **App Minimization**: Continue listening while switching apps or browsing other tasks.
+- **Persistent Engine**: Background audio service ensures zero audio cutoffs or decoder drops.
 
-### 2. 📺 YouTube Mobile Mode (Video App)
-- **Authentic YouTube Mobile UI**:
-  - Classic YouTube Dark Theme (`#0F0F0F`) and red brand accents (`#FF0000`).
-  - Top header with YouTube logo, Cast, Notifications, Search, and Profile avatar.
-  - Category filter chips: *All, Music, Podcasts, Gaming, News, Tech, Trending, Recently uploaded*.
-  - Full-fidelity video cards with 16:9 thumbnails, duration badges (`4:20`), channel avatars, video titles, view counts, and upload dates.
-  - Bottom navigation bar: *Home*, *Shorts*, *Subscriptions*, *You*.
-- **Video Watch Experience**:
-  - Integrated YouTube Player with controls, buffering handling, and fullscreen capabilities.
-  - Video title, views, and timestamp.
-  - Channel row with subscriber count and interactive **Subscribe** state.
-  - Action pills: **Like** (with counters), **Dislike**, **Share**, **Remix**, **Download**, and **Save**.
-  - Comments preview with comment counts and top comment highlights.
-  - Related videos queue.
+### 🔄 Dual-Mode Experience (Video & Music)
+- **Instant Mode Switch**: Seamlessly transition between YouTube Video and YouTube Music with a single tap.
+- **Playback Continuity**: Switching modes preserves the exact track, timestamp, and play state without reloading.
+- **Top Header Toggle**: Quick-switch pill accessible directly from the top bar.
 
-### 3. 🎵 YouTube Music Mode (Music App)
-- **Dedicated YouTube Music UI**:
-  - Obsidian dark aesthetic (`#030303`), circular YouTube Music logo with inner white play glyph.
-  - Mood & activity filter chips: *Energize, Workout, Relax, Focus, Commute, Party*.
-  - **Quick picks** curated song lists with instant single-tap playback.
-  - **Listen again** & **Recommended music videos** horizontal album carousels.
-  - **Trending Charts** song ranking.
-  - Bottom navigation bar: *Home*, *Samples*, *Explore*, *Library*.
-- **YouTube Music Player Screen**:
-  - **Signature `[ Song | Video ]` Toggle**:
-    - **Song Mode**: Focuses on large 1:1 square album artwork with rounded corners, drop shadows, and animated audio equalizer visualizer waveforms.
-    - **Video Mode**: Smoothly switches to the embedded music video player right inside the music player sheet.
-  - Full playback controls: Shuffle, Previous, big circular Play/Pause button, Next, Repeat.
-  - Like & Dislike rating buttons.
-  - Scrubbable progress slider with elapsed time and total duration.
-  - Bottom sheet with 3 tabs:
-    - **UP NEXT**: Interactive queue of upcoming songs.
-    - **LYRICS**: Beautifully formatted, readable lyrics.
-    - **RELATED**: Artist information, discography highlights, and similar tracks.
+### 🎬 Modernized Video Player
+- **Zero Cropping / Distortion**: Full native 16:9 aspect ratio video presentation with YouTube default clarity.
+- **Modern Compose HUD Overlay**:
+  - Center solid Play / Pause button.
+  - Rewind 10s and Fast-Forward 10s quick buttons.
+  - Next / Previous track buttons.
+  - Working **Fullscreen** toggle for immersive landscape viewing.
+  - Interactive scrubbable progress bar with elapsed and total duration.
+- **Queue & Related Shelf**: Scrollable "Up Next" queue and related video recommendations right below the player.
 
-### 4. 🎛️ Floating Mini-Player
-- A persistent mini-player bar that docks directly above the bottom navigation bar when navigating through feeds.
-- Displays thumbnail/album cover, song title, channel/artist, play/pause toggle, and progress indicator.
-- Tap anywhere on the bar to smoothly expand back into the full player.
+### 🎵 Dedicated YouTube Music Mode
+- **Song / Video Switcher**: Placed conveniently at the top center of music playback to switch between pure album art and music video.
+- **Protected Album View**: Touch-optimized album artwork that prevents accidental pause/play triggers during browsing.
+- **Curated Feeds**: Quick picks, Listen again, Trending Charts, and mood filters (*Energize, Relax, Focus, Workout*).
+- **Music Library**: Liked music, synced playlists, and history.
+
+### 🎛️ Floating Mini-Player
+- Docks smoothly above bottom navigation tabs when browsing feeds or channels.
+- Displays thumbnail, video title, channel name, play/pause controls, and live progress bar.
+- Expand back to the full player with a single tap.
+
+### 👤 Account & Session Management
+- **Google Account Sync**: View your personalized recommendations, liked videos, and playlists.
+- **Account Switcher**: Bottom sheet for managing connected accounts.
+- **One-Tap Logout**: Quick logout button located on the account row to easily sign out.
 
 ---
 
-## 🏗️ Architecture & Technology Stack
+## 🏗️ Tech Stack & Architecture
 
-- **Language**: Kotlin 2.0.21
-- **UI Framework**: Jetpack Compose (Material 3)
-- **Build System**: Gradle 8.13 + Android Gradle Plugin 8.7.3
-- **Target SDK**: Android 15 (API 35) | **Min SDK**: Android 8.0 (API 26)
-- **Image Loading**: Coil 2.7.0
-- **Video Engine**: Hardware-accelerated WebView bridge utilizing the YouTube IFrame API.
+- **Language**: [Kotlin](https://kotlinlang.org/) (v2.0.21)
+- **UI Toolkit**: [Jetpack Compose](https://developer.android.com/jetpack/compose) with Material Design 3
+- **Image Loading**: [Coil Compose](https://coil-kt.github.io/coil/) (v2.7.0)
+- **Player Bridge**: Hardware-accelerated Chromium WebView bridge with bidirectional JavaScript interface
+- **Media Controls**: AndroidX Media & Foreground Service integration
+- **Build System**: Gradle 8.13 with Android Gradle Plugin 8.7.3
 
 ---
 
-## 🚀 Building & Running
+## 🚀 Getting Started
 
 ### Prerequisites
-- JDK 17 or JDK 21
-- Android SDK (API 35 platform & build-tools)
+- **JDK 17** or **JDK 21**
+- **Android SDK** (API Level 35 build-tools)
+- Android device or emulator running **Android 8.0 (API 26)** or higher
 
-### Build Debug APK
-```powershell
-.\gradlew.bat assembleDebug
-```
-The compiled APK will be output to:
-`app\build\outputs\apk\debug\app-debug.apk`
+### Building the APK
 
-### Install on Connected Device or Emulator
-```powershell
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/Steushio/VideoGuard.git
+   cd VideoGuard
+   ```
+
+2. **Build Debug APK**:
+   - On Windows (PowerShell / Command Prompt):
+     ```cmd
+     gradlew.bat assembleDebug
+     ```
+   - On macOS / Linux:
+     ```bash
+     ./gradlew assembleDebug
+     ```
+
+3. **Locate the APK**:
+   The compiled APK will be created at:
+   ```
+   app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+### Installing via ADB
+
+With USB Debugging enabled on your Android phone:
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+---
+
+## 📁 Project Structure
+
+```
+VideoGuard/
+├── app/
+│   ├── src/main/
+│   │   ├── java/com/videoguard/app/
+│   │   │   ├── data/            # YouTube API sync, search engines & repositories
+│   │   │   ├── model/           # Data models (VideoItem, UserAccount, Playlist)
+│   │   │   ├── service/         # MediaPlaybackService & PlaybackController
+│   │   │   ├── ui/
+│   │   │   │   ├── components/  # Player overlay, top bar, nav bar, mini-player
+│   │   │   │   ├── screens/     # Feed, VideoDetail, MusicPlayer, You, Search
+│   │   │   │   └── theme/       # Color palette, Typography, MaterialTheme
+│   │   │   └── MainActivity.kt  # Root Compose Activity
+│   │   ├── AndroidManifest.xml
+│   │   └── res/                 # App launcher icons & resources
+│   └── build.gradle.kts
+├── gradle/                      # Version catalog & Gradle wrapper
+├── build.gradle.kts
+└── settings.gradle.kts
+```
+
+---
+
+## ⚖️ Disclaimer
+
+VideoGuard is an open-source project developed for educational and personal use. All video content, trademarks, and logos belong to their respective owners.
