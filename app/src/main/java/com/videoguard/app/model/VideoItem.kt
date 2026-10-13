@@ -17,5 +17,6 @@ data class VideoItem(
     val album: String = "",
     val lyrics: String = "",
     val category: String = "All",
-    val mood: String = "Energize"
+    val mood: String = "Energize",
+    val channelId: String = ""
 )

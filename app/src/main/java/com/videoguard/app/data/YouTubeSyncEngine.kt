@@ -1243,6 +1243,7 @@ object YouTubeSyncEngine {
         val title = extractTitleFromObject(obj) ?: return null
         val cover = extractFirstImageUrl(obj.optJSONObject("contentImage")) ?: extractFirstImageUrl(obj)
         val desc = extractPlaylistDescription(obj)
+        val count = extractPlaylistVideoCount(obj)
 
         return UserPlaylist(
             id = plId,
@@ -1250,8 +1251,64 @@ object YouTubeSyncEngine {
             description = desc,
             customCoverUrl = cover,
             isSystem = false,
-            iconType = "playlist"
+            iconType = "playlist",
+            totalVideosCount = count
         )
+    }
+
+    private fun extractPlaylistVideoCount(obj: JSONObject): Int? {
+        fun parseCount(text: String?): Int? {
+            if (text.isNullOrBlank()) return null
+            val match = Regex("""([\d,]+)\s*(?:videos|video)?""", RegexOption.IGNORE_CASE).find(text)
+            return match?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull()
+        }
+
+        val vc = obj.optString("videoCount")
+        parseCount(vc)?.let { return it }
+
+        val vct = obj.optJSONObject("videoCountText")?.let {
+            it.optString("simpleText").ifBlank {
+                it.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
+            }
+        }
+        parseCount(vct)?.let { return it }
+
+        val vcst = obj.optJSONObject("videoCountShortText")?.let {
+            it.optString("simpleText").ifBlank {
+                it.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
+            }
+        }
+        parseCount(vcst)?.let { return it }
+
+        fun searchBadge(o: Any?): Int? {
+            if (o == null) return null
+            when (o) {
+                is JSONObject -> {
+                    val tb = o.optJSONObject("thumbnailBadgeViewModel")
+                    if (tb != null) {
+                        parseCount(tb.optString("text"))?.let { return it }
+                    }
+                    val text = o.optString("text")
+                    if (text.contains("video", ignoreCase = true)) {
+                        parseCount(text)?.let { return it }
+                    }
+                    val keys = o.keys()
+                    while (keys.hasNext()) {
+                        val res = searchBadge(o.get(keys.next()))
+                        if (res != null) return res
+                    }
+                }
+                is JSONArray -> {
+                    for (i in 0 until o.length()) {
+                        val res = searchBadge(o.opt(i))
+                        if (res != null) return res
+                    }
+                }
+            }
+            return null
+        }
+
+        return searchBadge(obj.opt("contentImage") ?: obj)
     }
 
     private fun extractPlaylistsRecursively(obj: Any, outList: MutableList<UserPlaylist>) {
@@ -1294,5 +1351,240 @@ object YouTubeSyncEngine {
                 }
             }
         }
+    }
+
+    private val channelIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * Resolves a channel name to its YouTube Channel ID (UC...) using InnerTube search.
+     */
+    suspend fun resolveChannelId(channelNameOrId: String): String? = withContext(Dispatchers.IO) {
+        val trimmed = channelNameOrId.trim()
+        if (trimmed.isBlank()) return@withContext null
+        if (trimmed.startsWith("UC") && trimmed.length >= 20) return@withContext trimmed
+
+        channelIdCache[trimmed]?.let { return@withContext it }
+
+        try {
+            val payload = JSONObject().apply {
+                put("context", buildContext())
+                put("query", trimmed)
+                put("params", "EgIQAg%3D%3D") // Filter: Channel
+            }
+            val resp = callInnerTube("search", payload)
+            if (resp != null) {
+                val cid = findChannelIdRecursively(resp)
+                if (!cid.isNullOrBlank()) {
+                    channelIdCache[trimmed] = cid
+                    android.util.Log.d("YouTubeSyncEngine", "Resolved channel '$trimmed' -> $cid")
+                    return@withContext cid
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeSyncEngine", "resolveChannelId error for $trimmed", e)
+        }
+        null
+    }
+
+    private fun findChannelIdRecursively(obj: Any?): String? {
+        if (obj == null) return null
+        when (obj) {
+            is JSONObject -> {
+                val cr = obj.optJSONObject("channelRenderer")
+                if (cr != null) {
+                    val id = cr.optString("channelId")
+                    if (id.startsWith("UC")) return id
+                }
+                val cid = obj.optString("channelId")
+                if (cid.startsWith("UC")) return cid
+
+                val be = obj.optJSONObject("browseEndpoint")
+                val bid = be?.optString("browseId")
+                if (!bid.isNullOrBlank() && bid.startsWith("UC")) return bid
+
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val r = findChannelIdRecursively(obj.get(keys.next()))
+                    if (r != null) return r
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until obj.length()) {
+                    val r = findChannelIdRecursively(obj.opt(i))
+                    if (r != null) return r
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Fetches real channel videos with continuation token pagination support.
+     * Returns Pair of (videos, nextContinuationToken).
+     */
+    suspend fun fetchChannelVideos(
+        channelNameOrId: String,
+        continuationToken: String? = null
+    ): Pair<List<VideoItem>, String?> = withContext(Dispatchers.IO) {
+        val outVideos = mutableListOf<VideoItem>()
+        var nextToken: String? = null
+
+        if (!continuationToken.isNullOrBlank()) {
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("continuation", continuationToken)
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    extractVideosRecursively(resp, outVideos)
+                    nextToken = extractContinuationToken(resp)
+                    return@withContext Pair(outVideos.distinctBy { it.id }, nextToken)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos continuation error", e)
+            }
+        }
+
+        // Initial page via channelId
+        val cid = resolveChannelId(channelNameOrId)
+        if (!cid.isNullOrBlank()) {
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("browseId", cid)
+                    put("params", "EgZ2aWRlb3PyBgQKAjoA")
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    extractVideosRecursively(resp, outVideos)
+                    nextToken = extractContinuationToken(resp)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos initial error", e)
+            }
+        }
+
+        // Fallback if empty: YouTubeSearchEngine search
+        if (outVideos.isEmpty()) {
+            val searchFallback = YouTubeSearchEngine.searchVideos("$channelNameOrId official")
+            if (searchFallback.isNotEmpty()) {
+                return@withContext Pair(searchFallback, null)
+            }
+        }
+
+        Pair(outVideos.distinctBy { it.id }, nextToken)
+    }
+
+    /**
+     * Fetches real channel playlists with continuation token pagination support.
+     * Returns Pair of (playlists, nextContinuationToken).
+     */
+    suspend fun fetchChannelPlaylists(
+        channelNameOrId: String,
+        continuationToken: String? = null
+    ): Pair<List<UserPlaylist>, String?> = withContext(Dispatchers.IO) {
+        val outPlaylists = mutableListOf<UserPlaylist>()
+        var nextToken: String? = null
+
+        if (!continuationToken.isNullOrBlank()) {
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("continuation", continuationToken)
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    extractPlaylistsRecursively(resp, outPlaylists)
+                    nextToken = extractContinuationToken(resp)
+                    return@withContext Pair(outPlaylists.distinctBy { it.id }, nextToken)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelPlaylists continuation error", e)
+            }
+        }
+
+        // Initial page via channelId
+        val cid = resolveChannelId(channelNameOrId)
+        if (!cid.isNullOrBlank()) {
+            try {
+                val payload1 = JSONObject().apply {
+                    put("context", buildContext())
+                    put("browseId", cid)
+                    put("params", "EglwbGF5bGlzdHPyBgoKCEIGCgIQaCIA")
+                }
+                val resp1 = callInnerTube("browse", payload1)
+                if (resp1 != null) {
+                    extractPlaylistsRecursively(resp1, outPlaylists)
+                    nextToken = extractContinuationToken(resp1)
+                }
+
+                if (outPlaylists.isEmpty()) {
+                    val payload2 = JSONObject().apply {
+                        put("context", buildContext())
+                        put("browseId", cid)
+                        put("params", "EghwbGF5bGlzdHPyBgQKAjoA")
+                    }
+                    val resp2 = callInnerTube("browse", payload2)
+                    if (resp2 != null) {
+                        extractPlaylistsRecursively(resp2, outPlaylists)
+                        nextToken = extractContinuationToken(resp2)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelPlaylists initial error", e)
+            }
+        }
+
+        Pair(outPlaylists.distinctBy { it.id }, nextToken)
+    }
+
+    /**
+     * Fetches real channel shorts with continuation token pagination support.
+     * Returns Pair of (shorts, nextContinuationToken).
+     */
+    suspend fun fetchChannelShorts(
+        channelNameOrId: String,
+        continuationToken: String? = null
+    ): Pair<List<VideoItem>, String?> = withContext(Dispatchers.IO) {
+        val outShorts = mutableListOf<VideoItem>()
+        var nextToken: String? = null
+
+        if (!continuationToken.isNullOrBlank()) {
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("continuation", continuationToken)
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    extractVideosRecursively(resp, outShorts)
+                    nextToken = extractContinuationToken(resp)
+                    return@withContext Pair(outShorts.distinctBy { it.id }, nextToken)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts continuation error", e)
+            }
+        }
+
+        val cid = resolveChannelId(channelNameOrId)
+        if (!cid.isNullOrBlank()) {
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("browseId", cid)
+                    put("params", "EgZzaG9ydHPyBgUKA5oBAA%3D%3D")
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    extractVideosRecursively(resp, outShorts)
+                    nextToken = extractContinuationToken(resp)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts initial error", e)
+            }
+        }
+
+        Pair(outShorts.distinctBy { it.id }, nextToken)
     }
 }

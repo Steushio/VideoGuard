@@ -7,10 +7,11 @@ data class UserPlaylist(
     val videos: List<VideoItem> = emptyList(),
     val isSystem: Boolean = false,
     val iconType: String = "playlist", // "like", "watch_later", "playlist"
-    val customCoverUrl: String? = null
+    val customCoverUrl: String? = null,
+    val totalVideosCount: Int? = null
 ) {
     val videoCount: Int
-        get() = videos.size
+        get() = totalVideosCount ?: videos.size
 
     val coverThumbnailUrl: String?
         get() = customCoverUrl ?: videos.firstOrNull()?.thumbnailUrl
