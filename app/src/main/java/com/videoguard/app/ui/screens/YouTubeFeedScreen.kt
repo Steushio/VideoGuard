@@ -14,7 +14,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +35,7 @@ import com.videoguard.app.model.VideoItem
 import com.videoguard.app.ui.theme.YouTubeDarkBg
 import com.videoguard.app.ui.theme.YTMusicRedAccent
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YouTubeFeedScreen(
     onVideoSelected: (VideoItem, List<VideoItem>) -> Unit,
@@ -43,11 +48,14 @@ fun YouTubeFeedScreen(
     var feedVideos by remember { mutableStateOf(VideoRepository.getVideosByCategory(selectedCategory)) }
     var isLoadingFeed by remember { mutableStateOf(false) }
     var isLoadingMore by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     val currentAccount by com.videoguard.app.data.AccountRepository.currentAccount.collectAsState()
     val synchronizedFeed by com.videoguard.app.data.YouTubeSyncEngine.homeFeed.collectAsState()
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val pullToRefreshState = rememberPullToRefreshState()
+    val coroutineScope = rememberCoroutineScope()
 
     // Initial load / category change
     LaunchedEffect(selectedCategory, currentAccount) {
@@ -79,7 +87,7 @@ fun YouTubeFeedScreen(
     }
 
     LaunchedEffect(shouldLoadMore.value) {
-        if (shouldLoadMore.value && !isLoadingMore && !isLoadingFeed) {
+        if (shouldLoadMore.value && !isLoadingMore && !isLoadingFeed && !isRefreshing) {
             isLoadingMore = true
             com.videoguard.app.data.YouTubeSyncEngine.fetchMoreHomeFeed()
             // feedVideos will update via the synchronizedFeed LaunchedEffect above
@@ -87,12 +95,41 @@ fun YouTubeFeedScreen(
         }
     }
 
-    LazyColumn(
-        state = listState,
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            coroutineScope.launch {
+                isRefreshing = true
+                try {
+                    val fresh = com.videoguard.app.data.YouTubeSyncEngine.fetchHomeFeed(selectedCategory)
+                    if (fresh.isNotEmpty()) {
+                        feedVideos = fresh
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isRefreshing = false
+                }
+            }
+        },
+        state = pullToRefreshState,
         modifier = modifier
             .fillMaxSize()
-            .background(YouTubeDarkBg)
+            .background(YouTubeDarkBg),
+        indicator = {
+            PullToRefreshDefaults.Indicator(
+                state = pullToRefreshState,
+                isRefreshing = isRefreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+                containerColor = Color(0xFF282828),
+                color = Color.White
+            )
+        }
     ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize()
+        ) {
         // Category Chips Row
         item {
             Row(
@@ -172,6 +209,7 @@ fun YouTubeFeedScreen(
             Spacer(modifier = Modifier.height(80.dp))
         }
     }
+}
 }
 
 @Composable

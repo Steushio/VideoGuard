@@ -229,30 +229,30 @@ object YouTubeSyncEngine {
             if (searchResults.isNotEmpty()) return@withContext searchResults
         }
 
-        // 2. For "All": Fetch personalized YouTube Home feed via InnerTube FEwhat_to_watch
-        if (cookies.isNotBlank()) {
-            try {
-                val payload = JSONObject().apply {
-                    put("context", buildContext())
-                    put("browseId", "FEwhat_to_watch")
-                }
-                val resp = callInnerTube("browse", payload)
-                if (resp != null) {
-                    val videos = mutableListOf<VideoItem>()
-                    extractVideosRecursively(resp, videos)
-                    if (videos.isNotEmpty()) {
-                        val distinct = videos.distinctBy { it.id }
-                        cacheHomeFeed(distinct)
-                        // Store continuation token for "load more"
-                        homeFeedContinuationToken = extractContinuationToken(resp)
-                        return@withContext distinct
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+        // 2. For "All": Fetch YouTube Home feed via InnerTube FEwhat_to_watch
+        try {
+            val payload = JSONObject().apply {
+                put("context", buildContext())
+                put("browseId", "FEwhat_to_watch")
             }
+            val resp = callInnerTube("browse", payload)
+            if (resp != null) {
+                val videos = mutableListOf<VideoItem>()
+                extractVideosRecursively(resp, videos)
+                if (videos.isNotEmpty()) {
+                    val distinct = videos.distinctBy { it.id }
+                    cacheHomeFeed(distinct)
+                    // Store continuation token for "load more"
+                    homeFeedContinuationToken = extractContinuationToken(resp)
+                    return@withContext distinct
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
-            // Fallback: Fetch live HTML from YouTube homepage with auth cookies
+        // Fallback with cookies: Fetch live HTML from YouTube homepage with auth cookies
+        if (cookies.isNotBlank()) {
             try {
                 val url = URL("https://www.youtube.com/")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
