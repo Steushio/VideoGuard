@@ -44,7 +44,7 @@ fun TopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // App Name on Top Left (Crisp modern branding with accent dot)
+        // App Name on Top Left (Crisp modern branding)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clickable { onTitleClick() }
@@ -55,13 +55,6 @@ fun TopBar(
                 fontWeight = FontWeight.Bold,
                 fontSize = 20.sp,
                 letterSpacing = (-0.5).sp
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Box(
-                modifier = Modifier
-                    .size(5.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(if (isMusic) YTMusicRedAccent else YouTubeRed)
             )
         }
 
