@@ -221,12 +221,20 @@ fun MainScreen() {
                             appMode = newMode
                         },
                         onTitleClick = {
-                            if (appMode == AppMode.YOUTUBE) {
-                                selectedYTTab = YouTubeTab.HOME
+                            val wasAlreadyOnHome = if (appMode == AppMode.YOUTUBE) {
+                                selectedYTTab == YouTubeTab.HOME
                             } else {
-                                selectedMusicTab = YouTubeMusicTab.HOME
+                                selectedMusicTab == YouTubeMusicTab.HOME
                             }
-                            homeScrollToTopTrigger++
+                            if (wasAlreadyOnHome) {
+                                homeScrollToTopTrigger++
+                            } else {
+                                if (appMode == AppMode.YOUTUBE) {
+                                    selectedYTTab = YouTubeTab.HOME
+                                } else {
+                                    selectedMusicTab = YouTubeMusicTab.HOME
+                                }
+                            }
                         },
                         onSearchClick = {
                             isSearchActive = true
@@ -380,10 +388,17 @@ fun MainScreen() {
                     selectedMusicTab = selectedMusicTab,
                     isSearchActive = isSearchActive,
                     onHomeClick = {
+                        val wasAlreadyOnHome = if (appMode == AppMode.YOUTUBE) {
+                            !isSearchActive && activeChannelVideo == null && activePlaylist == null && selectedYTTab == YouTubeTab.HOME
+                        } else {
+                            !isSearchActive && activeChannelVideo == null && activePlaylist == null && selectedMusicTab == YouTubeMusicTab.HOME
+                        }
                         activeChannelVideo = null
                         activePlaylist = null
                         isSearchActive = false
-                        homeScrollToTopTrigger++
+                        if (wasAlreadyOnHome) {
+                            homeScrollToTopTrigger++
+                        }
                         if (appMode == AppMode.YOUTUBE) {
                             selectedYTTab = YouTubeTab.HOME
                         } else {
