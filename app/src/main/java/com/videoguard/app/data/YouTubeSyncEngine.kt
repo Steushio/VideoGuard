@@ -356,16 +356,13 @@ object YouTubeSyncEngine {
     }
 
     /**
-     * Fetches real user playlists from YouTube library when signed in.
-     */
-    /**
-     * Fetches real user playlists from YouTube library, playlist aggregation, and channel playlists.
+     * Fetches real user playlists from YouTube library, playlist aggregation, channel playlists, and guide.
      */
     suspend fun fetchPlaylists(): List<UserPlaylist> = withContext(Dispatchers.IO) {
         val cookies = getAuthCookies()
         val playlists = mutableListOf<UserPlaylist>()
 
-        // 1. Try InnerTube browse FEplaylist_aggregation (with pagination)
+        // 1. Try InnerTube browse FEplaylist_aggregation (with deep pagination up to 25 pages)
         if (cookies.isNotBlank()) {
             try {
                 val payload = JSONObject().apply {
@@ -374,7 +371,7 @@ object YouTubeSyncEngine {
                 }
                 var resp = callInnerTube("browse", payload)
                 var iterations = 0
-                while (resp != null && iterations < 5) {
+                while (resp != null && iterations < 25) {
                     extractPlaylistsRecursively(resp, playlists)
                     val token = extractContinuationToken(resp)
                     if (token.isNullOrBlank()) break
@@ -385,7 +382,7 @@ object YouTubeSyncEngine {
                     }
                     resp = callInnerTube("browse", contPayload)
                 }
-                android.util.Log.d("YouTubeSyncEngine", "FEplaylist_aggregation extracted ${playlists.size} playlists")
+                android.util.Log.d("YouTubeSyncEngine", "FEplaylist_aggregation extracted ${playlists.size} playlists (iterations=$iterations)")
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -406,7 +403,23 @@ object YouTubeSyncEngine {
                 e.printStackTrace()
             }
 
-            // 3. Try InnerTube guide endpoint (YouTube sidebar contains all saved and user playlists)
+            // 3. Try InnerTube browse FEchannels
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("browseId", "FEchannels")
+                }
+                val resp = callInnerTube("browse", payload)
+                if (resp != null) {
+                    val before = playlists.size
+                    extractPlaylistsRecursively(resp, playlists)
+                    android.util.Log.d("YouTubeSyncEngine", "FEchannels added ${playlists.size - before} playlists")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 4. Try InnerTube guide endpoint (YouTube sidebar contains all saved and user playlists)
             try {
                 val payload = JSONObject().apply {
                     put("context", buildContext())
@@ -422,34 +435,22 @@ object YouTubeSyncEngine {
             }
         }
 
-        // 4. Fetch user channel playlists directly (e.g. @Musicestery/playlists or /channel/mine/playlists)
+        // 5. Fetch user channel playlists & feed directly with redirect following
         val channelUrls = mutableListOf<String>()
         val handle = AccountRepository.currentAccount.value?.handle?.trim()?.removePrefix("@")
         if (!handle.isNullOrBlank() && handle != "youtube_user") {
             channelUrls.add("https://www.youtube.com/@$handle/playlists")
         }
-        channelUrls.add("https://www.youtube.com/channel/mine/playlists")
         channelUrls.add("https://www.youtube.com/feed/playlists")
+        channelUrls.add("https://www.youtube.com/channel/mine/playlists")
 
         for (urlStr in channelUrls) {
             try {
-                val url = URL(urlStr)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    requestMethod = "GET"
-                    connectTimeout = 8000
-                    readTimeout = 8000
-                    setRequestProperty("User-Agent", DESKTOP_UA)
-                    setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-                    if (cookies.isNotBlank()) {
-                        setRequestProperty("Cookie", cookies)
-                    }
-                }
-                if (conn.responseCode == 200) {
-                    val html = conn.inputStream.bufferedReader().use { it.readText() }
+                val html = fetchHtmlWithRedirects(urlStr, cookies)
+                if (!html.isNullOrBlank()) {
                     val before = playlists.size
                     playlists.addAll(parsePlaylistsFromHtml(html))
-                    android.util.Log.d("YouTubeSyncEngine", "Channel/Feed URL '$urlStr' added ${playlists.size - before} playlists")
+                    android.util.Log.d("YouTubeSyncEngine", "URL '$urlStr' added ${playlists.size - before} playlists")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -457,7 +458,7 @@ object YouTubeSyncEngine {
         }
 
         val result = playlists
-            .filter { it.id.isNotBlank() && it.title.isNotBlank() && it.id != "WL" && it.id != "LL" && it.id != "history" }
+            .filter { it.id.isNotBlank() && it.title.isNotBlank() && it.id != "WL" && it.id != "LL" && it.id != "history" && !it.id.startsWith("UC") && !it.id.startsWith("FE") }
             .distinctBy { it.id }
 
         result.forEach {
@@ -470,75 +471,79 @@ object YouTubeSyncEngine {
 
     /**
      * Fetches videos inside any YouTube playlist (e.g. user playlist, channel playlist, or mix)
-     * using InnerTube continuation pagination up to maxVideos (e.g. 1,000+).
+     * using InnerTube continuation pagination up to maxVideos (e.g. 2,000+).
      */
-    suspend fun fetchPlaylistVideos(playlistId: String, maxVideos: Int = 1500): List<VideoItem> = withContext(Dispatchers.IO) {
+    suspend fun fetchPlaylistVideos(playlistId: String, maxVideos: Int = 2000): List<VideoItem> = withContext(Dispatchers.IO) {
         if (playlistId.startsWith("playlist_") || playlistId == "favorites") {
             val local = UserDataRepository.playlists.value.find { it.id == playlistId }
             return@withContext local?.videos ?: emptyList()
         }
 
         val cookies = getAuthCookies()
-        val cleanId = when (playlistId) {
-            "liked_videos", "LL", "VLLL" -> "VLLL"
-            "watch_later", "WL", "VLWL" -> "VLWL"
-            else -> if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
-        }
         val rawId = when (playlistId) {
             "liked_videos", "LL", "VLLL" -> "LL"
             "watch_later", "WL", "VLWL" -> "WL"
             else -> playlistId.removePrefix("VL")
         }
-
-        val allVideos = mutableListOf<VideoItem>()
-
-        // 1. InnerTube browse request with continuation loop
-        try {
-            val payload = JSONObject().apply {
-                put("context", buildContext())
-                put("browseId", cleanId)
-            }
-            var resp = callInnerTube("browse", payload)
-            var iterations = 0
-            while (resp != null && iterations < 25 && allVideos.size < maxVideos) {
-                val batch = mutableListOf<VideoItem>()
-                extractVideosRecursively(resp, batch)
-                if (batch.isEmpty()) break
-                allVideos.addAll(batch)
-
-                val token = extractContinuationToken(resp)
-                if (token.isNullOrBlank()) break
-
-                iterations++
-                val contPayload = JSONObject().apply {
-                    put("context", buildContext())
-                    put("continuation", token)
-                }
-                resp = callInnerTube("browse", contPayload)
-            }
-            if (allVideos.isNotEmpty()) {
-                val distinct = allVideos.distinctBy { it.id }
-                android.util.Log.d("YouTubeSyncEngine", "fetchPlaylistVideos $cleanId total fetched ${distinct.size} videos in $iterations continuations")
-                return@withContext distinct
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        val cleanId = when (rawId) {
+            "LL" -> "VLLL"
+            "WL" -> "VLWL"
+            else -> "VL$rawId"
         }
 
-        // 2. Fallback: GET https://www.youtube.com/playlist?list=rawId
-        try {
-            val url = URL("https://www.youtube.com/playlist?list=$rawId")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8000
-                readTimeout = 8000
-                setRequestProperty("User-Agent", DESKTOP_UA)
-                if (cookies.isNotBlank()) {
-                    setRequestProperty("Cookie", cookies)
+        // InnerTube browse runner with continuation loop
+        suspend fun queryInnerTubeBrowse(browseId: String): List<VideoItem> {
+            val collected = mutableListOf<VideoItem>()
+            try {
+                val payload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("browseId", browseId)
                 }
+                var resp = callInnerTube("browse", payload)
+                var iterations = 0
+                while (resp != null && iterations < 50 && collected.size < maxVideos) {
+                    val batch = mutableListOf<VideoItem>()
+                    extractVideosRecursively(resp, batch)
+                    if (batch.isNotEmpty()) {
+                        collected.addAll(batch)
+                    }
+
+                    val token = extractContinuationToken(resp)
+                    if (token.isNullOrBlank()) break
+
+                    iterations++
+                    val contPayload = JSONObject().apply {
+                        put("context", buildContext())
+                        put("continuation", token)
+                    }
+                    resp = callInnerTube("browse", contPayload)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            if (conn.responseCode == 200) {
-                val html = conn.inputStream.bufferedReader().use { it.readText() }
+            return collected.distinctBy { it.id }
+        }
+
+        // 1. Try with cleanId (e.g. "VLPL...", "VLLL", "VLWL")
+        var results = queryInnerTubeBrowse(cleanId)
+        if (results.isNotEmpty()) {
+            android.util.Log.d("YouTubeSyncEngine", "fetchPlaylistVideos $cleanId total fetched ${results.size} videos")
+            return@withContext results
+        }
+
+        // 2. If cleanId yielded nothing, try with rawId (e.g. "PL...")
+        if (rawId != cleanId && rawId != "WL" && rawId != "LL") {
+            results = queryInnerTubeBrowse(rawId)
+            if (results.isNotEmpty()) {
+                android.util.Log.d("YouTubeSyncEngine", "fetchPlaylistVideos $rawId total fetched ${results.size} videos")
+                return@withContext results
+            }
+        }
+
+        // 3. Fallback: GET https://www.youtube.com/playlist?list=rawId
+        try {
+            val html = fetchHtmlWithRedirects("https://www.youtube.com/playlist?list=$rawId", cookies)
+            if (!html.isNullOrBlank()) {
                 val videos = parseVideosFromHtml(html)
                 if (videos.isNotEmpty()) {
                     android.util.Log.d("YouTubeSyncEngine", "fetchPlaylistVideos HTML extracted ${videos.size} videos")
@@ -707,9 +712,9 @@ object YouTubeSyncEngine {
                 e.printStackTrace()
             }
 
-            // Sync real Watch Later with pagination
+            // Sync real Watch Later with pagination (up to 2,000 videos)
             try {
-                val watchLater = fetchPlaylistVideos("VLWL", maxVideos = 500)
+                val watchLater = fetchPlaylistVideos("VLWL", maxVideos = 2000)
                 if (watchLater.isNotEmpty()) {
                     android.util.Log.d("YouTubeSyncEngine", "syncAllUserData: Watch later count=${watchLater.size}")
                     UserDataRepository.updateWatchLaterVideos(watchLater)
@@ -718,11 +723,11 @@ object YouTubeSyncEngine {
                 e.printStackTrace()
             }
 
-            // Sync user custom playlists (e.g. Music, shorts, etc.)
-            for (pl in onlinePlaylists.take(10)) {
+            // Sync user custom playlists (e.g. Music, podcasts, series, etc.)
+            for (pl in onlinePlaylists) {
                 if (pl.id != "liked_videos" && pl.id != "watch_later" && !pl.id.startsWith("playlist_") && pl.id != "favorites") {
                     try {
-                        val vids = fetchPlaylistVideos(pl.id, maxVideos = 500)
+                        val vids = fetchPlaylistVideos(pl.id, maxVideos = 2000)
                         if (vids.isNotEmpty()) {
                             android.util.Log.d("YouTubeSyncEngine", "syncAllUserData: Custom playlist '${pl.title}' (${pl.id}) synced ${vids.size} videos")
                             UserDataRepository.updatePlaylistVideos(pl.id, vids)
@@ -975,21 +980,58 @@ object YouTubeSyncEngine {
     private fun parsePlaylistsFromHtml(html: String): List<UserPlaylist> {
         val playlists = mutableListOf<UserPlaylist>()
         try {
-            val marker = "var ytInitialData = "
-            val startIdx = html.indexOf(marker)
-            if (startIdx != -1) {
-                val jsonStart = startIdx + marker.length
-                val endIdx = html.indexOf(";</script>", jsonStart)
-                if (endIdx != -1) {
-                    val jsonStr = html.substring(jsonStart, endIdx)
-                    val root = JSONObject(jsonStr)
-                    extractPlaylistsRecursively(root, playlists)
+            val markerIdx = html.indexOf("ytInitialData")
+            if (markerIdx != -1) {
+                val eqIdx = html.indexOf("=", markerIdx)
+                if (eqIdx != -1) {
+                    val braceIdx = html.indexOf("{", eqIdx)
+                    if (braceIdx != -1 && braceIdx - eqIdx < 15) {
+                        val endIdx = html.indexOf("</script>", braceIdx)
+                        if (endIdx != -1) {
+                            var jsonStr = html.substring(braceIdx, endIdx).trim()
+                            if (jsonStr.endsWith(";")) {
+                                jsonStr = jsonStr.substring(0, jsonStr.length - 1).trim()
+                            }
+                            val root = JSONObject(jsonStr)
+                            extractPlaylistsRecursively(root, playlists)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         return playlists.distinctBy { it.id }
+    }
+
+    private fun fetchHtmlWithRedirects(urlStr: String, cookies: String): String? {
+        var currentUrl = urlStr
+        var redirects = 0
+        while (redirects < 5) {
+            val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("User-Agent", DESKTOP_UA)
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                if (cookies.isNotBlank()) {
+                    setRequestProperty("Cookie", cookies)
+                }
+            }
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location") ?: break
+                currentUrl = if (loc.startsWith("http")) loc else URL(URL(currentUrl), loc).toString()
+                redirects++
+                continue
+            }
+            if (code == 200) {
+                return conn.inputStream.bufferedReader().use { it.readText() }
+            }
+            break
+        }
+        return null
     }
 
     private fun extractFirstImageUrl(obj: Any?): String? {
@@ -1024,16 +1066,43 @@ object YouTubeSyncEngine {
         if (obj == null) return null
         when (obj) {
             is JSONObject -> {
-                if (obj.has("continuationCommand")) {
-                    val token = obj.optJSONObject("continuationCommand")?.optString("token")
+                // 1. nextContinuationData (standard InnerTube browse pagination)
+                val ncd = obj.optJSONObject("nextContinuationData")
+                if (ncd != null) {
+                    val token = ncd.optString("continuation")
+                    if (token.isNotBlank()) return token
+                }
+
+                // 2. reloadContinuationData
+                val rcd = obj.optJSONObject("reloadContinuationData")
+                if (rcd != null) {
+                    val token = rcd.optString("continuation")
+                    if (token.isNotBlank()) return token
+                }
+
+                // 3. continuationCommand
+                val cc = obj.optJSONObject("continuationCommand")
+                if (cc != null) {
+                    val token = cc.optString("token")
+                    if (token.isNotBlank()) return token
+                }
+
+                // 4. continuationItemRenderer
+                val cir = obj.optJSONObject("continuationItemRenderer")
+                if (cir != null) {
+                    val ep = cir.optJSONObject("continuationEndpoint")
+                    val token = ep?.optJSONObject("continuationCommand")?.optString("token")
+                        ?: ep?.optString("continuation")
+                        ?: ep?.optJSONObject("continuationCommand")?.optString("continuation")
                     if (!token.isNullOrBlank()) return token
                 }
-                if (obj.has("continuationItemRenderer")) {
-                    val cir = obj.optJSONObject("continuationItemRenderer")
-                    val token = cir?.optJSONObject("continuationEndpoint")
-                        ?.optJSONObject("continuationCommand")?.optString("token")
-                    if (!token.isNullOrBlank()) return token
+
+                // 5. Direct continuation key with a long token
+                val directCont = obj.optString("continuation")
+                if (directCont.length > 20) {
+                    return directCont
                 }
+
                 val keys = obj.keys()
                 while (keys.hasNext()) {
                     val res = extractContinuationToken(obj.get(keys.next()))
@@ -1050,56 +1119,100 @@ object YouTubeSyncEngine {
         return null
     }
 
-    private fun parsePlaylistLockupViewModel(lvm: JSONObject?): UserPlaylist? {
-        if (lvm == null) return null
-        val contentType = lvm.optString("contentType")
-        val contentId = lvm.optString("contentId")
+    private fun extractPlaylistIdFromObject(obj: JSONObject): String? {
+        // 1. Direct playlistId
+        val plId = obj.optString("playlistId")
+        if (plId.isNotBlank() && plId != "WL" && plId != "LL" && plId != "history") {
+            return plId.removePrefix("VL")
+        }
 
-        if (contentType == "LOCKUP_CONTENT_TYPE_VIDEO" || contentType == "LOCKUP_CONTENT_TYPE_SHORTS") {
+        // 2. contentId
+        val cid = obj.optString("contentId")
+        if (cid.startsWith("PL") || cid.startsWith("RD") || cid.startsWith("FL") ||
+            cid.startsWith("UU") || cid.startsWith("OLAK") || cid.startsWith("TLGG") || cid.startsWith("CL")) {
+            return cid
+        }
+        if (cid.startsWith("VLPL") || cid.startsWith("VL")) {
+            return cid.removePrefix("VL")
+        }
+
+        // 3. Check endpoints recursively or by known paths
+        fun findInEndpoint(ep: JSONObject?): String? {
+            if (ep == null) return null
+            val pid = ep.optJSONObject("watchEndpoint")?.optString("playlistId")
+            if (!pid.isNullOrBlank() && pid != "WL" && pid != "LL") return pid.removePrefix("VL")
+
+            val bid = ep.optJSONObject("browseEndpoint")?.optString("browseId")
+            if (!bid.isNullOrBlank()) {
+                if (bid.startsWith("VLPL") || bid.startsWith("VL")) return bid.removePrefix("VL")
+                if (bid.startsWith("PL") || bid.startsWith("RD") || bid.startsWith("FL") ||
+                    bid.startsWith("UU") || bid.startsWith("OLAK")) return bid
+            }
+
+            val url = ep.optJSONObject("commandMetadata")?.optJSONObject("webCommandMetadata")?.optString("url")
+                ?: ep.optString("url")
+            if (url.contains("list=")) {
+                Regex("[?&]list=([a-zA-Z0-9_-]+)").find(url)?.let {
+                    val found = it.groupValues[1]
+                    if (found != "WL" && found != "LL") return found
+                }
+            }
             return null
         }
 
-        var plId = ""
-        if (contentId.startsWith("PL") || contentId.startsWith("RD") || contentId.startsWith("FL") ||
-            contentId.startsWith("UU") || contentId.startsWith("LL") || contentId.startsWith("WL")) {
-            plId = contentId
-        } else if (contentId.startsWith("VLPL") || contentId.startsWith("VL")) {
-            plId = contentId.removePrefix("VL")
+        findInEndpoint(obj.optJSONObject("navigationEndpoint"))?.let { return it }
+        findInEndpoint(obj.optJSONObject("onTap")?.optJSONObject("innertubeCommand"))?.let { return it }
+        findInEndpoint(obj.optJSONObject("rendererContext")?.optJSONObject("commandContext")?.optJSONObject("onTap")?.optJSONObject("innertubeCommand"))?.let { return it }
+        findInEndpoint(obj.optJSONObject("serviceEndpoint"))?.let { return it }
+
+        return null
+    }
+
+    private fun extractTitleFromObject(obj: JSONObject): String? {
+        val directTitle = obj.optString("title")
+        if (directTitle.isNotBlank() && !directTitle.startsWith("{")) return directTitle
+
+        obj.optJSONObject("title")?.let { t ->
+            t.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.ifBlank { null }?.let { return it }
+            t.optString("simpleText").ifBlank { null }?.let { return it }
+            t.optString("content").ifBlank { null }?.let { return it }
         }
 
-        if (plId.isBlank()) {
-            val tapUrl = lvm.optJSONObject("rendererContext")
-                ?.optJSONObject("commandContext")
-                ?.optJSONObject("onTap")
-                ?.optJSONObject("innertubeCommand")
-                ?.optJSONObject("commandMetadata")
-                ?.optJSONObject("webCommandMetadata")
-                ?.optString("url") ?: ""
-            if (tapUrl.contains("list=")) {
-                Regex("[?&]list=([a-zA-Z0-9_-]+)").find(tapUrl)?.let {
-                    plId = it.groupValues[1]
-                }
+        obj.optJSONObject("formattedTitle")?.let { t ->
+            t.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.ifBlank { null }?.let { return it }
+            t.optString("simpleText").ifBlank { null }?.let { return it }
+        }
+
+        obj.optJSONObject("metadata")?.optJSONObject("lockupMetadataViewModel")?.let { lmm ->
+            lmm.optJSONObject("title")?.let { t ->
+                t.optString("content").ifBlank { null }?.let { return it }
+                t.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.ifBlank { null }?.let { return it }
+                t.optString("simpleText").ifBlank { null }?.let { return it }
             }
         }
 
-        val isPlaylistType = contentType == "LOCKUP_CONTENT_TYPE_PLAYLIST" ||
-                contentType == "LOCKUP_CONTENT_TYPE_PODCAST" ||
-                contentType == "LOCKUP_CONTENT_TYPE_ALBUM"
-
-        if (!isPlaylistType && plId.isBlank()) return null
-        if (plId.isBlank() && contentId.isNotBlank() && contentId.length > 12) {
-            plId = contentId
+        obj.optJSONObject("headline")?.let { h ->
+            h.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.ifBlank { null }?.let { return it }
+            h.optString("simpleText").ifBlank { null }?.let { return it }
         }
-        if (plId.isBlank()) return null
 
-        val meta = lvm.optJSONObject("metadata")?.optJSONObject("lockupMetadataViewModel")
-        val title = meta?.optJSONObject("title")?.optString("content") ?: ""
-        if (title.isBlank()) return null
+        return null
+    }
 
-        var desc = "Synced from YouTube"
-        val rows = meta?.optJSONObject("metadata")?.optJSONObject("contentMetadataViewModel")?.optJSONArray("metadataRows")
-        if (rows != null && rows.length() > 0) {
-            val parts = mutableListOf<String>()
+    private fun extractPlaylistDescription(obj: JSONObject): String {
+        val vc = obj.optJSONObject("videoCountText")?.let {
+            it.optString("simpleText").ifBlank {
+                it.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
+            }
+        } ?: obj.optJSONObject("videoCountShortText")?.optString("simpleText") ?: ""
+
+        val parts = mutableListOf<String>()
+        if (vc.isNotBlank()) parts.add(vc)
+
+        val rows = obj.optJSONObject("metadata")?.optJSONObject("lockupMetadataViewModel")
+            ?.optJSONObject("metadata")?.optJSONObject("contentMetadataViewModel")
+            ?.optJSONArray("metadataRows")
+        if (rows != null) {
             for (i in 0 until rows.length()) {
                 val rowParts = rows.optJSONObject(i)?.optJSONArray("metadataParts")
                 if (rowParts != null) {
@@ -1111,100 +1224,31 @@ object YouTubeSyncEngine {
                     }
                 }
             }
-            if (parts.isNotEmpty()) {
-                desc = parts.joinToString(" • ")
-            }
         }
 
-        val cover = extractFirstImageUrl(lvm.optJSONObject("contentImage"))
+        return if (parts.isNotEmpty()) parts.distinct().joinToString(" • ") else "Synced from YouTube"
+    }
+
+    private fun parseAnyPlaylistRenderer(obj: JSONObject): UserPlaylist? {
+        val contentType = obj.optString("contentType")
+        if (contentType == "LOCKUP_CONTENT_TYPE_VIDEO" || contentType == "LOCKUP_CONTENT_TYPE_SHORTS") {
+            return null
+        }
+
+        val plId = extractPlaylistIdFromObject(obj) ?: return null
+        if (plId == "WL" || plId == "LL" || plId == "history" || plId.startsWith("UC") || plId.startsWith("FE")) {
+            return null
+        }
+
+        val title = extractTitleFromObject(obj) ?: return null
+        val cover = extractFirstImageUrl(obj.optJSONObject("contentImage")) ?: extractFirstImageUrl(obj)
+        val desc = extractPlaylistDescription(obj)
 
         return UserPlaylist(
             id = plId,
             title = title,
             description = desc,
             customCoverUrl = cover,
-            isSystem = false,
-            iconType = "playlist"
-        )
-    }
-
-    private fun parseLegacyPlaylistRenderer(pr: JSONObject?): UserPlaylist? {
-        if (pr == null) return null
-        var plId = pr.optString("playlistId")
-        if (plId.isBlank()) {
-            val navUrl = pr.optJSONObject("navigationEndpoint")
-                ?.optJSONObject("commandMetadata")
-                ?.optJSONObject("webCommandMetadata")
-                ?.optString("url") ?: ""
-            if (navUrl.contains("list=")) {
-                Regex("[?&]list=([a-zA-Z0-9_-]+)").find(navUrl)?.let {
-                    plId = it.groupValues[1]
-                }
-            }
-        }
-        if (plId.isBlank()) return null
-
-        val title = pr.optJSONObject("title")?.let { t ->
-            t.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
-                ?: t.optString("simpleText")
-        } ?: pr.optString("title")
-
-        if (title.isBlank()) return null
-
-        val cover = extractFirstImageUrl(pr)
-        val videoCount = pr.optJSONObject("videoCountText")?.let { vc ->
-            vc.optString("simpleText").ifBlank {
-                vc.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
-            }
-        } ?: pr.optJSONObject("videoCountShortText")?.optString("simpleText") ?: ""
-
-        val desc = if (videoCount.isNotBlank()) "$videoCount • Synced from YouTube" else "Synced from YouTube"
-
-        return UserPlaylist(
-            id = plId,
-            title = title,
-            description = desc,
-            customCoverUrl = cover,
-            isSystem = false,
-            iconType = "playlist"
-        )
-    }
-
-    private fun parseGuideEntryRenderer(ger: JSONObject?): UserPlaylist? {
-        if (ger == null) return null
-        val title = ger.optJSONObject("formattedTitle")?.let { t ->
-            t.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
-                ?: t.optString("simpleText")
-        } ?: ""
-        if (title.isBlank()) return null
-
-        val nav = ger.optJSONObject("navigationEndpoint")
-        var plId = nav?.optJSONObject("watchEndpoint")?.optString("playlistId") ?: ""
-        if (plId.isBlank()) {
-            val browseId = nav?.optJSONObject("browseEndpoint")?.optString("browseId") ?: ""
-            if (browseId.startsWith("VLPL") || browseId.startsWith("VL")) {
-                plId = browseId.removePrefix("VL")
-            } else if (browseId.startsWith("PL")) {
-                plId = browseId
-            }
-        }
-        if (plId.isBlank()) {
-            val url = nav?.optJSONObject("commandMetadata")?.optJSONObject("webCommandMetadata")?.optString("url") ?: ""
-            if (url.contains("list=")) {
-                Regex("[?&]list=([a-zA-Z0-9_-]+)").find(url)?.let {
-                    plId = it.groupValues[1]
-                }
-            }
-        }
-        if (plId.isBlank() || plId == "WL" || plId == "LL" || plId == "history") return null
-
-        val thumb = extractFirstImageUrl(ger)
-
-        return UserPlaylist(
-            id = plId,
-            title = title,
-            description = "Synced from YouTube",
-            customCoverUrl = thumb,
             isSystem = false,
             iconType = "playlist"
         )
@@ -1213,36 +1257,31 @@ object YouTubeSyncEngine {
     private fun extractPlaylistsRecursively(obj: Any, outList: MutableList<UserPlaylist>) {
         when (obj) {
             is JSONObject -> {
-                if (obj.has("lockupViewModel")) {
-                    parsePlaylistLockupViewModel(obj.optJSONObject("lockupViewModel"))?.let {
-                        outList.add(it)
+                // Check all known playlist renderer wrappers
+                val wrappers = listOf(
+                    "lockupViewModel",
+                    "playlistRenderer",
+                    "gridPlaylistRenderer",
+                    "compactPlaylistRenderer",
+                    "radioRenderer",
+                    "guideEntryRenderer",
+                    "guideCollapsibleSectionEntryRenderer",
+                    "guideItemRenderer",
+                    "playlistCardViewModel",
+                    "musicTwoRowItemRenderer",
+                    "musicResponsiveListItemRenderer"
+                )
+                for (wrapper in wrappers) {
+                    if (obj.has(wrapper)) {
+                        obj.optJSONObject(wrapper)?.let { pObj ->
+                            parseAnyPlaylistRenderer(pObj)?.let { outList.add(it) }
+                        }
                     }
                 }
-                if (obj.has("playlistRenderer")) {
-                    parseLegacyPlaylistRenderer(obj.optJSONObject("playlistRenderer"))?.let {
-                        outList.add(it)
-                    }
-                }
-                if (obj.has("gridPlaylistRenderer")) {
-                    parseLegacyPlaylistRenderer(obj.optJSONObject("gridPlaylistRenderer"))?.let {
-                        outList.add(it)
-                    }
-                }
-                if (obj.has("compactPlaylistRenderer")) {
-                    parseLegacyPlaylistRenderer(obj.optJSONObject("compactPlaylistRenderer"))?.let {
-                        outList.add(it)
-                    }
-                }
-                if (obj.has("radioRenderer")) {
-                    parseLegacyPlaylistRenderer(obj.optJSONObject("radioRenderer"))?.let {
-                        outList.add(it)
-                    }
-                }
-                if (obj.has("guideEntryRenderer")) {
-                    parseGuideEntryRenderer(obj.optJSONObject("guideEntryRenderer"))?.let {
-                        outList.add(it)
-                    }
-                }
+
+                // Also check if obj itself is a renderer with playlist data
+                parseAnyPlaylistRenderer(obj)?.let { outList.add(it) }
+
                 val keys = obj.keys()
                 while (keys.hasNext()) {
                     extractPlaylistsRecursively(obj.get(keys.next()), outList)
