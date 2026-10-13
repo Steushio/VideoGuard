@@ -41,6 +41,7 @@ fun YouTubeFeedScreen(
     onVideoSelected: (VideoItem, List<VideoItem>) -> Unit,
     onSwitchToMusic: () -> Unit,
     onChannelClick: (VideoItem) -> Unit = {},
+    scrollToTopTrigger: Int = 0,
     modifier: Modifier = Modifier
 ) {
     var selectedCategory by remember { mutableStateOf("All") }
@@ -56,6 +57,32 @@ fun YouTubeFeedScreen(
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
     val coroutineScope = rememberCoroutineScope()
+
+    // Drag / animate scroll to top when Home button is clicked
+    LaunchedEffect(scrollToTopTrigger) {
+        if (scrollToTopTrigger > 0) {
+            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
+                // Already at the very top: trigger refresh like YouTube
+                isRefreshing = true
+                try {
+                    val fresh = com.videoguard.app.data.YouTubeSyncEngine.fetchHomeFeed(selectedCategory)
+                    if (fresh.isNotEmpty()) {
+                        feedVideos = fresh
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isRefreshing = false
+                }
+            } else {
+                // Smoothly drag scroll back to top
+                if (listState.firstVisibleItemIndex > 8) {
+                    listState.scrollToItem(8)
+                }
+                listState.animateScrollToItem(0)
+            }
+        }
+    }
 
     // Initial load / category change
     LaunchedEffect(selectedCategory, currentAccount) {

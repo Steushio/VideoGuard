@@ -50,6 +50,7 @@ fun MainScreen() {
     var musicViewMode by remember { mutableStateOf(MusicPlayerViewMode.SONG) }
     var selectedYTTab by remember { mutableStateOf(YouTubeTab.HOME) }
     var selectedMusicTab by remember { mutableStateOf(YouTubeMusicTab.HOME) }
+    var homeScrollToTopTrigger by remember { mutableStateOf(0) }
 
     val currentVideo by PlaybackController.currentTrack.collectAsState()
     val isPlaying by PlaybackController.isPlaying.collectAsState()
@@ -219,6 +220,14 @@ fun MainScreen() {
                         onModeChanged = { newMode ->
                             appMode = newMode
                         },
+                        onTitleClick = {
+                            if (appMode == AppMode.YOUTUBE) {
+                                selectedYTTab = YouTubeTab.HOME
+                            } else {
+                                selectedMusicTab = YouTubeMusicTab.HOME
+                            }
+                            homeScrollToTopTrigger++
+                        },
                         onSearchClick = {
                             isSearchActive = true
                         },
@@ -314,7 +323,8 @@ fun MainScreen() {
                                             },
                                             onChannelClick = { video ->
                                                 activeChannelVideo = video
-                                            }
+                                            },
+                                            scrollToTopTrigger = homeScrollToTopTrigger
                                         )
                                     }
                                 }
@@ -339,7 +349,8 @@ fun MainScreen() {
                                             onTrackSelected = { track, queue ->
                                                 PlaybackController.playTrack(track, queue)
                                                 isPlayerExpanded = true
-                                            }
+                                            },
+                                            scrollToTopTrigger = homeScrollToTopTrigger
                                         )
                                     }
                                 }
@@ -372,6 +383,7 @@ fun MainScreen() {
                         activeChannelVideo = null
                         activePlaylist = null
                         isSearchActive = false
+                        homeScrollToTopTrigger++
                         if (appMode == AppMode.YOUTUBE) {
                             selectedYTTab = YouTubeTab.HOME
                         } else {

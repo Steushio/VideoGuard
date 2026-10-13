@@ -25,6 +25,7 @@ import com.videoguard.app.ui.theme.YTMusicRedAccent
 fun TopBar(
     currentMode: AppMode,
     onModeChanged: (AppMode) -> Unit,
+    onTitleClick: () -> Unit = {},
     onSearchClick: () -> Unit = {},
     isBackgroundPlay: Boolean = true,
     onToggleBackgroundPlay: () -> Unit = {},
@@ -46,7 +47,7 @@ fun TopBar(
         // App Name on Top Left (Crisp modern branding with accent dot)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { /* Brand clicked */ }
+            modifier = Modifier.clickable { onTitleClick() }
         ) {
             Text(
                 text = "VideoGuard",

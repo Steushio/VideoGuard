@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,7 @@ import com.videoguard.app.ui.theme.YTMusicRedAccent
 @Composable
 fun YouTubeMusicScreen(
     onTrackSelected: (VideoItem, List<VideoItem>) -> Unit,
+    scrollToTopTrigger: Int = 0,
     modifier: Modifier = Modifier
 ) {
     var selectedMood by remember { mutableStateOf("Energize") }
@@ -41,7 +43,19 @@ fun YouTubeMusicScreen(
     }
     val allMusicTracks = remember { VideoRepository.getMusicTracks() }
 
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(scrollToTopTrigger) {
+        if (scrollToTopTrigger > 0) {
+            if (listState.firstVisibleItemIndex > 8) {
+                listState.scrollToItem(8)
+            }
+            listState.animateScrollToItem(0)
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .background(YTMusicBlack)
