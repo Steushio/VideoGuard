@@ -42,26 +42,53 @@ fun YouTubeFeedScreen(
     val categories = VideoRepository.youtubeCategories
     var feedVideos by remember { mutableStateOf(VideoRepository.getVideosByCategory(selectedCategory)) }
     var isLoadingFeed by remember { mutableStateOf(false) }
+    var isLoadingMore by remember { mutableStateOf(false) }
 
     val currentAccount by com.videoguard.app.data.AccountRepository.currentAccount.collectAsState()
     val synchronizedFeed by com.videoguard.app.data.YouTubeSyncEngine.homeFeed.collectAsState()
 
-    LaunchedEffect(selectedCategory, currentAccount, synchronizedFeed) {
-        if (selectedCategory == "All" && synchronizedFeed.isNotEmpty()) {
-            feedVideos = synchronizedFeed
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    // Initial load / category change
+    LaunchedEffect(selectedCategory, currentAccount) {
+        isLoadingFeed = true
+        val online = com.videoguard.app.data.YouTubeSyncEngine.fetchHomeFeed(selectedCategory)
+        if (online.isNotEmpty()) {
+            feedVideos = online
         } else {
-            isLoadingFeed = true
-            val online = com.videoguard.app.data.YouTubeSyncEngine.fetchHomeFeed(selectedCategory)
-            if (online.isNotEmpty()) {
-                feedVideos = online
-            } else {
-                feedVideos = VideoRepository.getVideosByCategory(selectedCategory)
-            }
-            isLoadingFeed = false
+            feedVideos = VideoRepository.getVideosByCategory(selectedCategory)
+        }
+        isLoadingFeed = false
+    }
+
+    // Keep UI in sync when synchronizedFeed is updated (e.g. after fetchMoreHomeFeed appends)
+    LaunchedEffect(synchronizedFeed) {
+        if (synchronizedFeed.isNotEmpty() && selectedCategory == "All") {
+            feedVideos = synchronizedFeed
+        }
+    }
+
+    // Infinite scroll: detect when user is near the last item
+    val shouldLoadMore = remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = layoutInfo.totalItemsCount
+            totalItems > 0 && lastVisible >= totalItems - 4
+        }
+    }
+
+    LaunchedEffect(shouldLoadMore.value) {
+        if (shouldLoadMore.value && !isLoadingMore && !isLoadingFeed) {
+            isLoadingMore = true
+            com.videoguard.app.data.YouTubeSyncEngine.fetchMoreHomeFeed()
+            // feedVideos will update via the synchronizedFeed LaunchedEffect above
+            isLoadingMore = false
         }
     }
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .background(YouTubeDarkBg)
@@ -120,6 +147,24 @@ fun YouTubeFeedScreen(
                 onChannelClick = { onChannelClick(video) }
             )
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Loading More spinner at bottom
+        if (isLoadingMore) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
         }
 
         // Bottom space so mini-player won't hide last item

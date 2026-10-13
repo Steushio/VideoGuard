@@ -83,10 +83,69 @@ object YouTubeSyncEngine {
     private val _homeFeed = kotlinx.coroutines.flow.MutableStateFlow<List<VideoItem>>(emptyList())
     val homeFeed: kotlinx.coroutines.flow.StateFlow<List<VideoItem>> = _homeFeed.asStateFlow()
 
+    // Stores the continuation token for the home feed so we can page in more results
+    private var homeFeedContinuationToken: String? = null
+    private var homeFeedCategory: String = "All"
+
     fun cacheHomeFeed(videos: List<VideoItem>) {
         if (videos.isNotEmpty()) {
             _homeFeed.value = videos
         }
+    }
+
+    /**
+     * Appends more videos to the home feed using the stored continuation token.
+     * Returns true if more items were loaded, false if nothing new was found.
+     */
+    suspend fun fetchMoreHomeFeed(): Boolean = withContext(Dispatchers.IO) {
+        val token = homeFeedContinuationToken
+        val category = homeFeedCategory
+
+        // If we have a continuation token, try to use it via InnerTube
+        if (!token.isNullOrBlank()) {
+            try {
+                val contPayload = JSONObject().apply {
+                    put("context", buildContext())
+                    put("continuation", token)
+                }
+                val resp = callInnerTube("browse", contPayload)
+                if (resp != null) {
+                    val batch = mutableListOf<VideoItem>()
+                    extractVideosRecursively(resp, batch)
+                    val newToken = extractContinuationToken(resp)
+                    homeFeedContinuationToken = newToken
+
+                    if (batch.isNotEmpty()) {
+                        val existingIds = _homeFeed.value.map { it.id }.toSet()
+                        val fresh = batch.filter { it.id !in existingIds }
+                        if (fresh.isNotEmpty()) {
+                            _homeFeed.value = _homeFeed.value + fresh
+                            return@withContext true
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // Fallback: load another page of search results for the category
+        try {
+            val q = if (category == "All") "trending" else category
+            val extra = YouTubeSearchEngine.searchVideos(q)
+            if (extra.isNotEmpty()) {
+                val existingIds = _homeFeed.value.map { it.id }.toSet()
+                val fresh = extra.filter { it.id !in existingIds }
+                if (fresh.isNotEmpty()) {
+                    _homeFeed.value = _homeFeed.value + fresh
+                    return@withContext true
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        false
     }
 
     fun parseVideosFromJsonString(jsonStr: String): List<VideoItem> {
@@ -161,10 +220,7 @@ object YouTubeSyncEngine {
      * Fetches personalized or category-based YouTube home feed videos.
      */
     suspend fun fetchHomeFeed(category: String = "All"): List<VideoItem> = withContext(Dispatchers.IO) {
-        if (category == "All" && _homeFeed.value.isNotEmpty()) {
-            return@withContext _homeFeed.value
-        }
-
+        homeFeedCategory = category
         val cookies = getAuthCookies()
 
         // 1. If category chip selected (Music, Gaming, Podcasts, News, etc.)
@@ -187,6 +243,8 @@ object YouTubeSyncEngine {
                     if (videos.isNotEmpty()) {
                         val distinct = videos.distinctBy { it.id }
                         cacheHomeFeed(distinct)
+                        // Store continuation token for "load more"
+                        homeFeedContinuationToken = extractContinuationToken(resp)
                         return@withContext distinct
                     }
                 }
@@ -210,6 +268,7 @@ object YouTubeSyncEngine {
                     val html = conn.inputStream.bufferedReader().use { it.readText() }
                     val videos = parseVideosFromHtml(html)
                     if (videos.isNotEmpty()) {
+                        cacheHomeFeed(videos)
                         return@withContext videos
                     }
                 }
@@ -226,6 +285,7 @@ object YouTubeSyncEngine {
         if (!historyTopic.isNullOrBlank()) {
             val dynamicVideos = YouTubeSearchEngine.searchVideos(historyTopic)
             if (dynamicVideos.isNotEmpty()) {
+                cacheHomeFeed(dynamicVideos)
                 return@withContext dynamicVideos
             }
         }
@@ -233,6 +293,7 @@ object YouTubeSyncEngine {
         // 4. Fallback: Trending popular videos
         val popular = YouTubeSearchEngine.searchVideos("trending")
         if (popular.isNotEmpty()) {
+            cacheHomeFeed(popular)
             return@withContext popular
         }
 

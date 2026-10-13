@@ -6,6 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +65,41 @@ fun SearchScreen(
     var hasSearched by remember { mutableStateOf(false) }
     val searchHistory by UserDataRepository.searchHistory.collectAsState()
 
+    // Infinite scroll state
+    val searchListState = rememberLazyListState()
+    var isLoadingMoreSearch by remember { mutableStateOf(false) }
+    var seenSearchIds by remember { mutableStateOf(setOf<String>()) }
+
+    // Detect when user is near the bottom of search results
+    val shouldLoadMoreSearch = remember {
+        derivedStateOf {
+            val layoutInfo = searchListState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = layoutInfo.totalItemsCount
+            hasSearched && total > 0 && lastVisible >= total - 3
+        }
+    }
+
+    // Load more when near bottom
+    LaunchedEffect(shouldLoadMoreSearch.value) {
+        if (shouldLoadMoreSearch.value && !isLoadingMoreSearch && searchQuery.isNotBlank()) {
+            isLoadingMoreSearch = true
+            try {
+                val more = YouTubeSearchEngine.searchVideos(searchQuery, isMusicOnly = isMusic)
+                val currentIds = seenSearchIds
+                val newItems = more.filter { it.id !in currentIds }
+                if (newItems.isNotEmpty()) {
+                    seenSearchIds = currentIds + newItems.map { it.id }
+                    searchResults = searchResults + newItems
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isLoadingMoreSearch = false
+            }
+        }
+    }
+
     val presetChips = listOf(
         "Malayalam", "Malayalam Songs", "The Weeknd", "Lofi Beats",
         "Imagine Dragons", "Dua Lipa", "Taylor Swift", "Trending News"
@@ -76,6 +112,7 @@ fun SearchScreen(
         suggestionsList = emptyList()
         isSearching = true
         hasSearched = true
+        seenSearchIds = emptySet()
         keyboardController?.hide()
         UserDataRepository.addSearchQuery(trimmed)
 
@@ -83,6 +120,7 @@ fun SearchScreen(
             try {
                 val results = YouTubeSearchEngine.searchVideos(trimmed, isMusicOnly = isMusic)
                 searchResults = results
+                seenSearchIds = results.map { it.id }.toSet()
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -289,6 +327,7 @@ fun SearchScreen(
             } else {
                 // Results Section
                 LazyColumn(
+                    state = searchListState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 8.dp)
@@ -341,6 +380,24 @@ fun SearchScreen(
                                 onChannelClick = { onChannelClick(video) }
                             )
                             Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+
+                    // Loading more spinner at the bottom
+                    if (isLoadingMoreSearch) {
+                        item(key = "load_more_spinner") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = if (isMusic) Color.White else YouTubeRed,
+                                    modifier = Modifier.size(28.dp),
+                                    strokeWidth = 2.5.dp
+                                )
+                            }
                         }
                     }
                 }
