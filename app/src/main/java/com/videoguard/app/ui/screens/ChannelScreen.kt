@@ -77,15 +77,25 @@ fun ChannelScreen(
             it.channelName.equals(channelName, ignoreCase = true) ||
                     (it.artist.isNotBlank() && it.artist.contains(channelName, ignoreCase = true))
         }
-        channelVideos = localMatches
+        channelVideos = localMatches.map {
+            it.copy(channelName = channelName, artist = channelName, channelAvatarUrl = if (channelAvatarUrl.isNotBlank()) channelAvatarUrl else it.channelAvatarUrl)
+        }
 
         // Fetch real live videos from the YouTube channel
-        val (realVideos, nextVToken) = YouTubeSyncEngine.fetchChannelVideos(channelName)
-        val combined = (localMatches + realVideos).distinctBy { it.id }
+        val (realVideos, nextVToken) = YouTubeSyncEngine.fetchChannelVideos(channelName, null, channelAvatarUrl)
+        val combined = (localMatches + realVideos).distinctBy { it.id }.map {
+            it.copy(
+                channelName = channelName,
+                artist = channelName,
+                channelAvatarUrl = if (channelAvatarUrl.isNotBlank()) channelAvatarUrl else it.channelAvatarUrl
+            )
+        }
         if (combined.isNotEmpty()) {
             channelVideos = combined
         } else if (localMatches.isEmpty()) {
-            channelVideos = VideoRepository.sampleVideos.take(6)
+            channelVideos = VideoRepository.sampleVideos.take(6).map {
+                it.copy(channelName = channelName, artist = channelName, channelAvatarUrl = channelAvatarUrl)
+            }
         }
         videosContinuationToken = nextVToken
         isLoadingVideos = false
@@ -102,8 +112,14 @@ fun ChannelScreen(
     LaunchedEffect(selectedTab) {
         if (selectedTab == "Shorts" && channelShorts.isEmpty() && !isLoadingShorts) {
             isLoadingShorts = true
-            val (shorts, sToken) = YouTubeSyncEngine.fetchChannelShorts(channelName)
-            channelShorts = shorts
+            val (shorts, sToken) = YouTubeSyncEngine.fetchChannelShorts(channelName, null, channelAvatarUrl)
+            channelShorts = shorts.map {
+                it.copy(
+                    channelName = channelName,
+                    artist = channelName,
+                    channelAvatarUrl = if (channelAvatarUrl.isNotBlank()) channelAvatarUrl else it.channelAvatarUrl
+                )
+            }
             shortsContinuationToken = sToken
             isLoadingShorts = false
         } else if (selectedTab == "Playlists" && channelPlaylists.isEmpty() && !isLoadingPlaylists) {
@@ -124,10 +140,17 @@ fun ChannelScreen(
             try {
                 val token = videosContinuationToken
                 if (!token.isNullOrBlank()) {
-                    val (moreVids, nextToken) = YouTubeSyncEngine.fetchChannelVideos(channelName, token)
+                    val (moreVids, nextToken) = YouTubeSyncEngine.fetchChannelVideos(channelName, token, channelAvatarUrl)
                     if (moreVids.isNotEmpty()) {
+                        val sanitizedBatch = moreVids.map {
+                            it.copy(
+                                channelName = channelName,
+                                artist = channelName,
+                                channelAvatarUrl = if (channelAvatarUrl.isNotBlank()) channelAvatarUrl else it.channelAvatarUrl
+                            )
+                        }
                         val existing = channelVideos.map { it.id }.toSet()
-                        val newBatch = moreVids.filter { it.id !in existing }
+                        val newBatch = sanitizedBatch.filter { it.id !in existing }
                         channelVideos = channelVideos + newBatch
                     }
                     videosContinuationToken = if (moreVids.isEmpty()) null else nextToken
@@ -172,10 +195,17 @@ fun ChannelScreen(
             try {
                 val token = shortsContinuationToken
                 if (!token.isNullOrBlank()) {
-                    val (moreShorts, nextToken) = YouTubeSyncEngine.fetchChannelShorts(channelName, token)
+                    val (moreShorts, nextToken) = YouTubeSyncEngine.fetchChannelShorts(channelName, token, channelAvatarUrl)
                     if (moreShorts.isNotEmpty()) {
+                        val sanitizedBatch = moreShorts.map {
+                            it.copy(
+                                channelName = channelName,
+                                artist = channelName,
+                                channelAvatarUrl = if (channelAvatarUrl.isNotBlank()) channelAvatarUrl else it.channelAvatarUrl
+                            )
+                        }
                         val existing = channelShorts.map { it.id }.toSet()
-                        val newBatch = moreShorts.filter { it.id !in existing }
+                        val newBatch = sanitizedBatch.filter { it.id !in existing }
                         channelShorts = channelShorts + newBatch
                     }
                     shortsContinuationToken = if (moreShorts.isEmpty()) null else nextToken

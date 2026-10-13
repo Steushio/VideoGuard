@@ -818,6 +818,17 @@ object YouTubeSyncEngine {
         }
     }
 
+    fun isViewOrDateString(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        val lower = t.lowercase()
+        if (lower.endsWith("views") || lower.endsWith("view") || lower.contains(" views") || lower.contains(" view")) return true
+        if (lower.endsWith("ago") || lower.startsWith("streamed") || lower.contains("streamed") || lower.endsWith("watching") || lower.contains("watching")) return true
+        if (lower.startsWith("premier") || lower.contains("scheduled")) return true
+        if (Regex("""^(\d+(\.\d+)?[KMB]?\s*(views?|watching)|no\s*views?)""", RegexOption.IGNORE_CASE).containsMatchIn(t)) return true
+        return false
+    }
+
     private fun parseLockupViewModel(lvm: JSONObject?): VideoItem? {
         if (lvm == null) return null
         val contentType = lvm.optString("contentType")
@@ -837,24 +848,29 @@ object YouTubeSyncEngine {
 
         val rows = meta?.optJSONObject("metadata")?.optJSONObject("contentMetadataViewModel")?.optJSONArray("metadataRows")
         if (rows != null) {
-            if (rows.length() > 0) {
-                val row0 = rows.optJSONObject(0)?.optJSONArray("metadataParts")
-                if (row0 != null && row0.length() > 0) {
-                    val c = row0.optJSONObject(0)?.optJSONObject("text")?.optString("content")
-                    if (!c.isNullOrBlank()) channel = c
+            val allParts = mutableListOf<String>()
+            for (i in 0 until rows.length()) {
+                val rowParts = rows.optJSONObject(i)?.optJSONArray("metadataParts")
+                if (rowParts != null) {
+                    for (j in 0 until rowParts.length()) {
+                        val txt = rowParts.optJSONObject(j)?.optJSONObject("text")?.optString("content")?.trim()
+                        if (!txt.isNullOrBlank()) {
+                            allParts.add(txt)
+                        }
+                    }
                 }
             }
-            if (rows.length() > 1) {
-                val row1 = rows.optJSONObject(1)?.optJSONArray("metadataParts")
-                if (row1 != null) {
-                    if (row1.length() > 0) {
-                        val v = row1.optJSONObject(0)?.optJSONObject("text")?.optString("content")
-                        if (!v.isNullOrBlank()) views = v
+
+            for (part in allParts) {
+                if (isViewOrDateString(part)) {
+                    val lower = part.lowercase()
+                    if (lower.contains("view") || lower.contains("watching")) {
+                        views = part
+                    } else if (lower.contains("ago") || lower.contains("streamed")) {
+                        uploadTime = part
                     }
-                    if (row1.length() > 1) {
-                        val t = row1.optJSONObject(1)?.optJSONObject("text")?.optString("content")
-                        if (!t.isNullOrBlank()) uploadTime = t
-                    }
+                } else if (channel == "YouTube Creator") {
+                    channel = part
                 }
             }
         }
@@ -873,6 +889,22 @@ object YouTubeSyncEngine {
             thumb = thumbSources.optJSONObject(thumbSources.length() - 1)?.optString("url") ?: thumb
         }
 
+        var duration = "3:45"
+        val overlays = lvm.optJSONObject("contentImage")?.optJSONObject("thumbnailViewModel")?.optJSONArray("overlays")
+        if (overlays != null) {
+            for (i in 0 until overlays.length()) {
+                val overlay = overlays.optJSONObject(i)?.optJSONObject("thumbnailBottomOverlayViewModel")
+                val badges = overlay?.optJSONArray("badges")
+                if (badges != null && badges.length() > 0) {
+                    val badgeText = badges.optJSONObject(0)?.optJSONObject("thumbnailBadgeViewModel")?.optString("text")
+                    if (!badgeText.isNullOrBlank()) {
+                        duration = badgeText
+                        break
+                    }
+                }
+            }
+        }
+
         return VideoItem(
             id = vid,
             title = title,
@@ -882,7 +914,7 @@ object YouTubeSyncEngine {
             thumbnailUrl = thumb,
             views = views,
             uploadTime = uploadTime,
-            duration = "3:45",
+            duration = duration,
             description = title,
             likes = "100K",
             isMusicTrack = title.contains("Music", ignoreCase = true) || title.contains("Song", ignoreCase = true) || title.contains("ft.", ignoreCase = true),
@@ -1424,10 +1456,13 @@ object YouTubeSyncEngine {
      */
     suspend fun fetchChannelVideos(
         channelNameOrId: String,
-        continuationToken: String? = null
+        continuationToken: String? = null,
+        fallbackAvatar: String? = null
     ): Pair<List<VideoItem>, String?> = withContext(Dispatchers.IO) {
         val outVideos = mutableListOf<VideoItem>()
         var nextToken: String? = null
+        var headerChannelName: String? = null
+        var headerAvatarUrl: String? = null
 
         if (!continuationToken.isNullOrBlank()) {
             try {
@@ -1444,37 +1479,69 @@ object YouTubeSyncEngine {
             } catch (e: Exception) {
                 android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos continuation error", e)
             }
-            return@withContext Pair(outVideos.distinctBy { it.id }, nextToken)
-        }
+        } else {
+            // Initial page via channelId
+            val cid = resolveChannelId(channelNameOrId)
+            if (!cid.isNullOrBlank()) {
+                try {
+                    val payload = JSONObject().apply {
+                        put("context", buildContext())
+                        put("browseId", cid)
+                        put("params", "EgZ2aWRlb3PyBgQKAjoA")
+                    }
+                    val resp = callInnerTube("browse", payload)
+                    if (resp != null) {
+                        extractVideosRecursively(resp, outVideos)
+                        nextToken = extractContinuationToken(resp)
+                        val header = resp.optJSONObject("header")
+                        val pageHeader = header?.optJSONObject("pageHeaderRenderer")
+                        if (pageHeader != null) {
+                            headerChannelName = pageHeader.optString("pageTitle").ifBlank { null }
+                            headerAvatarUrl = extractFirstImageUrl(pageHeader)
+                        }
+                        val c4Header = header?.optJSONObject("c4TabbedHeaderRenderer")
+                        if (c4Header != null) {
+                            if (headerChannelName == null) headerChannelName = c4Header.optString("title").ifBlank { null }
+                            if (headerAvatarUrl == null) headerAvatarUrl = extractFirstImageUrl(c4Header.optJSONObject("avatar"))
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos initial error", e)
+                }
+            }
 
-        // Initial page via channelId
-        val cid = resolveChannelId(channelNameOrId)
-        if (!cid.isNullOrBlank()) {
-            try {
-                val payload = JSONObject().apply {
-                    put("context", buildContext())
-                    put("browseId", cid)
-                    put("params", "EgZ2aWRlb3PyBgQKAjoA")
+            // Fallback if empty: YouTubeSearchEngine search
+            if (outVideos.isEmpty()) {
+                val searchFallback = YouTubeSearchEngine.searchVideos("$channelNameOrId official")
+                if (searchFallback.isNotEmpty()) {
+                    return@withContext Pair(searchFallback, null)
                 }
-                val resp = callInnerTube("browse", payload)
-                if (resp != null) {
-                    extractVideosRecursively(resp, outVideos)
-                    nextToken = extractContinuationToken(resp)
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("YouTubeSyncEngine", "fetchChannelVideos initial error", e)
             }
         }
 
-        // Fallback if empty: YouTubeSearchEngine search
-        if (outVideos.isEmpty()) {
-            val searchFallback = YouTubeSearchEngine.searchVideos("$channelNameOrId official")
-            if (searchFallback.isNotEmpty()) {
-                return@withContext Pair(searchFallback, null)
+        val effectiveChannel = headerChannelName
+            ?: if (!channelNameOrId.startsWith("UC")) channelNameOrId else "YouTube Creator"
+        val effectiveAvatar = headerAvatarUrl ?: fallbackAvatar
+
+        val sanitized = outVideos.map { vid ->
+            val finalChannel = if (vid.channelName == "YouTube Creator" || isViewOrDateString(vid.channelName) || vid.channelName.isBlank()) {
+                effectiveChannel
+            } else {
+                vid.channelName
             }
+            val finalAvatar = if ((vid.channelAvatarUrl.isBlank() || vid.channelAvatarUrl.contains("unsplash")) && !effectiveAvatar.isNullOrBlank()) {
+                effectiveAvatar
+            } else {
+                vid.channelAvatarUrl
+            }
+            vid.copy(
+                channelName = finalChannel,
+                artist = finalChannel,
+                channelAvatarUrl = finalAvatar
+            )
         }
 
-        Pair(outVideos.distinctBy { it.id }, nextToken)
+        Pair(sanitized.distinctBy { it.id }, nextToken)
     }
 
     /**
@@ -1547,10 +1614,13 @@ object YouTubeSyncEngine {
      */
     suspend fun fetchChannelShorts(
         channelNameOrId: String,
-        continuationToken: String? = null
+        continuationToken: String? = null,
+        fallbackAvatar: String? = null
     ): Pair<List<VideoItem>, String?> = withContext(Dispatchers.IO) {
         val outShorts = mutableListOf<VideoItem>()
         var nextToken: String? = null
+        var headerChannelName: String? = null
+        var headerAvatarUrl: String? = null
 
         if (!continuationToken.isNullOrBlank()) {
             try {
@@ -1567,27 +1637,59 @@ object YouTubeSyncEngine {
             } catch (e: Exception) {
                 android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts continuation error", e)
             }
-            return@withContext Pair(outShorts.distinctBy { it.id }, nextToken)
-        }
-
-        val cid = resolveChannelId(channelNameOrId)
-        if (!cid.isNullOrBlank()) {
-            try {
-                val payload = JSONObject().apply {
-                    put("context", buildContext())
-                    put("browseId", cid)
-                    put("params", "EgZzaG9ydHPyBgUKA5oBAA%3D%3D")
+        } else {
+            val cid = resolveChannelId(channelNameOrId)
+            if (!cid.isNullOrBlank()) {
+                try {
+                    val payload = JSONObject().apply {
+                        put("context", buildContext())
+                        put("browseId", cid)
+                        put("params", "EgZzaG9ydHPyBgUKA5oBAA%3D%3D")
+                    }
+                    val resp = callInnerTube("browse", payload)
+                    if (resp != null) {
+                        extractVideosRecursively(resp, outShorts)
+                        nextToken = extractContinuationToken(resp)
+                        val header = resp.optJSONObject("header")
+                        val pageHeader = header?.optJSONObject("pageHeaderRenderer")
+                        if (pageHeader != null) {
+                            headerChannelName = pageHeader.optString("pageTitle").ifBlank { null }
+                            headerAvatarUrl = extractFirstImageUrl(pageHeader)
+                        }
+                        val c4Header = header?.optJSONObject("c4TabbedHeaderRenderer")
+                        if (c4Header != null) {
+                            if (headerChannelName == null) headerChannelName = c4Header.optString("title").ifBlank { null }
+                            if (headerAvatarUrl == null) headerAvatarUrl = extractFirstImageUrl(c4Header.optJSONObject("avatar"))
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts initial error", e)
                 }
-                val resp = callInnerTube("browse", payload)
-                if (resp != null) {
-                    extractVideosRecursively(resp, outShorts)
-                    nextToken = extractContinuationToken(resp)
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("YouTubeSyncEngine", "fetchChannelShorts initial error", e)
             }
         }
 
-        Pair(outShorts.distinctBy { it.id }, nextToken)
+        val effectiveChannel = headerChannelName
+            ?: if (!channelNameOrId.startsWith("UC")) channelNameOrId else "YouTube Creator"
+        val effectiveAvatar = headerAvatarUrl ?: fallbackAvatar
+
+        val sanitized = outShorts.map { vid ->
+            val finalChannel = if (vid.channelName == "YouTube Creator" || isViewOrDateString(vid.channelName) || vid.channelName.isBlank()) {
+                effectiveChannel
+            } else {
+                vid.channelName
+            }
+            val finalAvatar = if ((vid.channelAvatarUrl.isBlank() || vid.channelAvatarUrl.contains("unsplash")) && !effectiveAvatar.isNullOrBlank()) {
+                effectiveAvatar
+            } else {
+                vid.channelAvatarUrl
+            }
+            vid.copy(
+                channelName = finalChannel,
+                artist = finalChannel,
+                channelAvatarUrl = finalAvatar
+            )
+        }
+
+        Pair(sanitized.distinctBy { it.id }, nextToken)
     }
 }

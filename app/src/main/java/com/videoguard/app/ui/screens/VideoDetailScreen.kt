@@ -140,6 +140,21 @@ fun VideoDetailScreen(
 
             // Channel Bar
             item {
+                val resolvedChannelName = remember(video) {
+                    if (com.videoguard.app.data.YouTubeSyncEngine.isViewOrDateString(video.channelName)) {
+                        if (!com.videoguard.app.data.YouTubeSyncEngine.isViewOrDateString(video.artist) && video.artist.isNotBlank() && video.artist != "YouTube Creator") {
+                            video.artist
+                        } else {
+                            "YouTube Creator"
+                        }
+                    } else {
+                        video.channelName
+                    }
+                }
+                val safeVideo = remember(video, resolvedChannelName) {
+                    video.copy(channelName = resolvedChannelName)
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -148,23 +163,23 @@ fun VideoDetailScreen(
                 ) {
                     AsyncImage(
                         model = video.channelAvatarUrl,
-                        contentDescription = video.channelName,
+                        contentDescription = resolvedChannelName,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(Color(0xFF333333))
-                            .clickable { onChannelClick(video) }
+                            .clickable { onChannelClick(safeVideo) }
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { onChannelClick(video) }
+                            .clickable { onChannelClick(safeVideo) }
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = video.channelName,
+                                text = resolvedChannelName,
                                 color = Color.White,
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 14.sp,
