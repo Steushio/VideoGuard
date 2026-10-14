@@ -87,22 +87,37 @@ fun YouTubeFeedScreen(
         }
     }
 
-    // Infinite scroll: detect when user is near the last item
-    val shouldLoadMore = remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val totalItems = layoutInfo.totalItemsCount
-            totalItems > 0 && lastVisible >= totalItems - 4
+    fun loadMoreFeed() {
+        if (isLoadingFeed || isLoadingMore || isRefreshing) return
+        isLoadingMore = true
+        coroutineScope.launch {
+            try {
+                val loaded = com.videoguard.app.data.YouTubeSyncEngine.fetchMoreHomeFeed()
+                if (loaded) {
+                    val sync = com.videoguard.app.data.YouTubeSyncEngine.homeFeed.value
+                    if (sync.isNotEmpty()) {
+                        feedVideos = sync
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("YouTubeFeedScreen", "Error loading more feed", e)
+            } finally {
+                isLoadingMore = false
+            }
         }
     }
 
-    LaunchedEffect(shouldLoadMore.value) {
-        if (shouldLoadMore.value && !isLoadingMore && !isLoadingFeed && !isRefreshing) {
-            isLoadingMore = true
-            com.videoguard.app.data.YouTubeSyncEngine.fetchMoreHomeFeed()
-            // feedVideos will update via the synchronizedFeed LaunchedEffect above
-            isLoadingMore = false
+    // Infinite scroll: monitor list scroll position using snapshotFlow
+    LaunchedEffect(listState, selectedCategory) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            Pair(lastVisible, total)
+        }.collect { (lastVisible, total) ->
+            if (total > 0 && lastVisible >= total - 4) {
+                loadMoreFeed()
+            }
         }
     }
 

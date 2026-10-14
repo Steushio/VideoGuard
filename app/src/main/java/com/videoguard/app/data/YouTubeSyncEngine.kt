@@ -86,11 +86,39 @@ object YouTubeSyncEngine {
     // Stores the continuation token for the home feed so we can page in more results
     private var homeFeedContinuationToken: String? = null
     private var homeFeedCategory: String = "All"
+    private var homeFeedPage: Int = 0
 
     fun cacheHomeFeed(videos: List<VideoItem>) {
         if (videos.isNotEmpty()) {
             _homeFeed.value = videos
         }
+    }
+
+    /**
+     * Executes an InnerTube video search, returning parsed videos and updating continuation token.
+     */
+    suspend fun searchVideosInnerTube(query: String, filterToVideos: Boolean = true): List<VideoItem> = withContext(Dispatchers.IO) {
+        val outVideos = mutableListOf<VideoItem>()
+        try {
+            val payload = JSONObject().apply {
+                put("context", buildContext())
+                put("query", query)
+                if (filterToVideos) {
+                    put("params", "EgIQAQ%3D%3D") // Filter: Video
+                }
+            }
+            val resp = callInnerTube("search", payload)
+            if (resp != null) {
+                extractVideosRecursively(resp, outVideos)
+                val token = extractContinuationToken(resp)
+                if (!token.isNullOrBlank()) {
+                    homeFeedContinuationToken = token
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeSyncEngine", "searchVideosInnerTube error", e)
+        }
+        outVideos.distinctBy { it.id }
     }
 
     /**
@@ -101,14 +129,17 @@ object YouTubeSyncEngine {
         val token = homeFeedContinuationToken
         val category = homeFeedCategory
 
-        // If we have a continuation token, try to use it via InnerTube
+        // 1. If we have a continuation token, try to use it via InnerTube browse or search
         if (!token.isNullOrBlank()) {
             try {
                 val contPayload = JSONObject().apply {
                     put("context", buildContext())
                     put("continuation", token)
                 }
-                val resp = callInnerTube("browse", contPayload)
+                var resp = callInnerTube("browse", contPayload)
+                if (resp == null) {
+                    resp = callInnerTube("search", contPayload)
+                }
                 if (resp != null) {
                     val batch = mutableListOf<VideoItem>()
                     extractVideosRecursively(resp, batch)
@@ -120,29 +151,35 @@ object YouTubeSyncEngine {
                         val fresh = batch.filter { it.id !in existingIds }
                         if (fresh.isNotEmpty()) {
                             _homeFeed.value = _homeFeed.value + fresh
+                            android.util.Log.d("YouTubeSyncEngine", "fetchMoreHomeFeed appended ${fresh.size} videos via continuation, total=${_homeFeed.value.size}")
                             return@withContext true
                         }
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("YouTubeSyncEngine", "fetchMoreHomeFeed continuation error", e)
             }
         }
 
-        // Fallback: load another page of search results for the category
+        // 2. Fallback: query InnerTube search with rotating topics for continuous pagination
         try {
-            val q = if (category == "All") "trending" else category
-            val extra = YouTubeSearchEngine.searchVideos(q)
+            homeFeedPage++
+            val topics = listOf("trending videos", "popular new music", "viral entertainment", "top movies clips", "gaming highlights", "news highlights")
+            val queryTopic = if (category != "All" && category.isNotBlank()) category else topics[homeFeedPage % topics.size]
+            val extra = searchVideosInnerTube(queryTopic).ifEmpty {
+                YouTubeSearchEngine.searchVideos(queryTopic, page = homeFeedPage)
+            }
             if (extra.isNotEmpty()) {
                 val existingIds = _homeFeed.value.map { it.id }.toSet()
                 val fresh = extra.filter { it.id !in existingIds }
                 if (fresh.isNotEmpty()) {
                     _homeFeed.value = _homeFeed.value + fresh
+                    android.util.Log.d("YouTubeSyncEngine", "fetchMoreHomeFeed appended ${fresh.size} videos via topic '$queryTopic', total=${_homeFeed.value.size}")
                     return@withContext true
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("YouTubeSyncEngine", "fetchMoreHomeFeed topic error", e)
         }
 
         false
@@ -221,12 +258,18 @@ object YouTubeSyncEngine {
      */
     suspend fun fetchHomeFeed(category: String = "All"): List<VideoItem> = withContext(Dispatchers.IO) {
         homeFeedCategory = category
+        homeFeedPage = 0
         val cookies = getAuthCookies()
 
         // 1. If category chip selected (Music, Gaming, Podcasts, News, etc.)
         if (category != "All" && category.isNotBlank()) {
-            val searchResults = YouTubeSearchEngine.searchVideos(category)
-            if (searchResults.isNotEmpty()) return@withContext searchResults
+            val searchResults = searchVideosInnerTube(category).ifEmpty {
+                YouTubeSearchEngine.searchVideos(category)
+            }
+            if (searchResults.isNotEmpty()) {
+                cacheHomeFeed(searchResults)
+                return@withContext searchResults
+            }
         }
 
         // 2. For "All": Fetch YouTube Home feed via InnerTube FEwhat_to_watch
@@ -240,41 +283,41 @@ object YouTubeSyncEngine {
                 val videos = mutableListOf<VideoItem>()
                 extractVideosRecursively(resp, videos)
                 if (videos.isNotEmpty()) {
-                    val distinct = videos.distinctBy { it.id }
+                    val distinct = videos.distinctBy { it.id }.toMutableList()
+                    var token = extractContinuationToken(resp)
+                    // If initial page returned only a few items (e.g. 2-3 items),
+                    // proactively load continuation so feed has 15-20 rich items!
+                    var iter = 0
+                    while (!token.isNullOrBlank() && distinct.size < 15 && iter < 3) {
+                        iter++
+                        val contPayload = JSONObject().apply {
+                            put("context", buildContext())
+                            put("continuation", token)
+                        }
+                        val contResp = callInnerTube("browse", contPayload)
+                        if (contResp != null) {
+                            val more = mutableListOf<VideoItem>()
+                            extractVideosRecursively(contResp, more)
+                            val nextTok = extractContinuationToken(contResp)
+                            token = nextTok
+                            if (more.isNotEmpty()) {
+                                val existingIds = distinct.map { it.id }.toSet()
+                                distinct.addAll(more.filter { it.id !in existingIds })
+                            } else {
+                                break
+                            }
+                        } else {
+                            break
+                        }
+                    }
                     cacheHomeFeed(distinct)
-                    // Store continuation token for "load more"
-                    homeFeedContinuationToken = extractContinuationToken(resp)
+                    homeFeedContinuationToken = token
+                    android.util.Log.d("YouTubeSyncEngine", "fetchHomeFeed returning ${distinct.size} videos")
                     return@withContext distinct
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Fallback with cookies: Fetch live HTML from YouTube homepage with auth cookies
-        if (cookies.isNotBlank()) {
-            try {
-                val url = URL("https://www.youtube.com/")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 8000
-                    readTimeout = 8000
-                    setRequestProperty("User-Agent", DESKTOP_UA)
-                    setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-                    setRequestProperty("Cookie", cookies)
-                }
-
-                if (conn.responseCode == 200) {
-                    val html = conn.inputStream.bufferedReader().use { it.readText() }
-                    val videos = parseVideosFromHtml(html)
-                    if (videos.isNotEmpty()) {
-                        cacheHomeFeed(videos)
-                        return@withContext videos
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            android.util.Log.e("YouTubeSyncEngine", "fetchHomeFeed FEwhat_to_watch error", e)
         }
 
         // 3. Fallback: Search based on real user watch history
@@ -283,15 +326,19 @@ object YouTubeSyncEngine {
         }
         val historyTopic = recentHistory.firstOrNull()?.channelName
         if (!historyTopic.isNullOrBlank()) {
-            val dynamicVideos = YouTubeSearchEngine.searchVideos(historyTopic)
+            val dynamicVideos = searchVideosInnerTube(historyTopic).ifEmpty {
+                YouTubeSearchEngine.searchVideos(historyTopic)
+            }
             if (dynamicVideos.isNotEmpty()) {
                 cacheHomeFeed(dynamicVideos)
                 return@withContext dynamicVideos
             }
         }
 
-        // 4. Fallback: Trending popular videos
-        val popular = YouTubeSearchEngine.searchVideos("trending")
+        // 4. Fallback: Trending popular videos via InnerTube search (returns 20+ real videos)
+        val popular = searchVideosInnerTube("trending").ifEmpty {
+            YouTubeSearchEngine.searchVideos("trending")
+        }
         if (popular.isNotEmpty()) {
             cacheHomeFeed(popular)
             return@withContext popular
